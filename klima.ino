@@ -1,5 +1,5 @@
 /*
- * ver 0.3
+ * ver 0.4
  * 
  * Sources:
  * http://www.jerome-bernard.com/blog/2015/10/04/wifi-temperature-sensor-with-nodemcu-esp8266/
@@ -23,23 +23,31 @@ extern "C" {
 }
 
 
-#define SLEEP_DELAY_IN_TENS_OF_SECONDS    44    // * 10s
+#define SLEEP_DELAY_IN_SECONDS  40
 #define ONE_WIRE_BUS            4               // DS18B20 pin
 #define STBUF                   120
+#define NOCFGSTR                8
 
 char ssid[2][8];
 char password[2][20];
-const char* greetmsg = "\rKlima za po doma,  ver. 0.3 (c) kek0 2016.";
+const char* greetmsg = "\rKlima za po doma,  ver. 0.4 (c) kek0 2016.";
 int led = 2, i, j, chipID, Vcc;
 unsigned int localPort = 1245, httpPort = 80;
-char webSrv[] = "oblak.kek0.net";
-char st1[STBUF], cfg_dat[] = "/config";
+char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
+char st1[STBUF], st2[NOCFGSTR][8] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "INVL: ", "WUIV: " };
+
+struct _strk {
+  char st1[STBUF];
+  char st2[15];
+  int stfnd;
+  int stfin;
+  int st2len;
+} strk[NOCFGSTR];
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
 char temperatureString[6];
 ADC_MODE(ADC_VCC);
-WiFiServer server(23);
 WiFiClient client;
 
 
@@ -102,58 +110,72 @@ bool setupWiFi() {
       }
     } else {
       Serial.println("  OK");
-//      break;
+      //Serial.print("  IP: ");
+      //Serial.println(WiFi.localIP());
+      //Serial.setDebugOutput(true);
+      //WiFi.printDiag(Serial);
     }
   }
   return(true);
 }
 
-int getDTime() {
-  char st2[]="Date: ", in[STBUF];
-  int sfound, dtread, st2len=strlen(st2);
+int getParms() {
+  char in[STBUF];
+  char _st1[25][NOCFGSTR];
+  char _st2[15][NOCFGSTR];
+  int _stfnd[NOCFGSTR];
+  int _stfin[NOCFGSTR];
+  int _st2len[NOCFGSTR];
 
+  //Serial.printf("getParms %d\r\n", sizeof(strk));
+  for(i=0; i<NOCFGSTR; i++) {
+    _stfnd[i]=0;        // broj poklapanih znakova
+    _stfin[i]=0;        // nadjeno poklapanje
+    _st2len[i] = strlen(st2[i]);
+    _st1[0][i] = '\0';
+//    strcpy(_st2[i], st2[i]);
+  }
+
+  delay(150);
   if (!client.connect(webSrv, httpPort)) {
-    Serial.println("connection to server failed");
+    Serial.println("connection to server failed [p]");
     return 0;
   }
-  sprintf(st1, "GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", webSrv);
+  sprintf(st1, "GET /vatra/pali?ci=%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", chipID, webSrv);
   client.print(st1);
   delay(150);
-  
-  // Read all the lines of the reply from server and print them to Serial
+
+  Serial.printf("getParms:1\r\n");
+  // Read all the lines of the reply from server
   j=0;
-  sfound=0;
-  dtread=0;
-  st1[0] = '\0';
   while(client.available()){
     in[j] = client.read();
-    if(dtread)
-      continue;
-    if(j < st2len) {
-      if(in[j] == st2[j]) {
-        sfound++;
+    for(i=0; i<NOCFGSTR; i++) {
+      if(j < _st2len[i]) {
+        if(in[j] == _st2[i][j]) {
+          _stfnd[i]++;
+        }
+      } else if(_stfnd[i] == _st2len[i]) {
+        _st1[i][j- _st2len[i]] = in[j];
       }
-    } else {
-//      Serial.printf("A%cB%dC%dD  ", in[j], j, j-st2len);
-      st1[j- st2len] = in[j];
     }
+
     if(in[j] == '\r' || in[j] == '\n' || j == STBUF-1) {
-      //Serial.printf("[%d,%d]: %s;\r\n", j, sfound, st1);
-      if(sfound == st2len) {
-        st1[j- st2len] = '\0';
-//        Serial.printf("\r\n%%K: %s;\n\r\n", st1);
-        dtread = 1;
-      } else {
-        j=0;
-        sfound=0;
+      for(i=0; i<NOCFGSTR; i++) {
+//        printf("[%d,%d]: %s;\n", j, strk[i].stfnd[i], strk[i].st1[i]);
+        if(_stfnd[i] == _st2len[i] && !_stfin[i]) {
+          _st1[i][j- _st2len[i]] = '\0';
+//          printf("\n%%%d K: %s;\n", i, strk[i].st1);
+          _stfin[i] = 1;
+        } else {
+          _stfnd[i]=0;
+        }
       }
+      j=0;
     } else {
       j++;
-//      delay(10);
     }
   }
-  if(dtread)
-    return strlen(st1);
   return 0;
 }
 
@@ -161,7 +183,7 @@ int drvaIugljen() {
   String line;
 
   if (!client.connect(webSrv, httpPort)) {
-    Serial.println("connection to server failed");
+    Serial.println("connection to server failed.");
     return -1;
   }
   digitalWrite(led, 0);
@@ -248,7 +270,7 @@ int readConfig() {
 
 void setup() {
 
- delay(2500);
+  delay(2500);
   Serial.begin(115200);
   Serial.println ( greetmsg );
   delay(1500);
@@ -259,6 +281,20 @@ void setup() {
   DS18B20.begin();
   chipID = ESP.getChipId();
   Serial.printf("ESP8266 Chip id = %08X\r\n", chipID);
+
+//  uint32_t realSize = ESP.getFlashChipRealSize();
+//  uint32_t ideSize = ESP.getFlashChipSize();
+//  FlashMode_t ideMode = ESP.getFlashChipMode();
+//  Serial.printf("Flash real id:   %08X\r\n", ESP.getFlashChipId());
+//  Serial.printf("Flash real size: %u\n\r\n", realSize);
+//  Serial.printf("Flash ide  size: %u\r\n", ideSize);
+//  Serial.printf("Flash ide speed: %u\r\n", ESP.getFlashChipSpeed());
+//  Serial.printf("Flash ide mode:  %s\r\n", (ideMode == FM_QIO ? "QIO" : ideMode == FM_QOUT ? "QOUT" : ideMode == FM_DIO ? "DIO" : ideMode == FM_DOUT ? "DOUT" : "UNKNOWN"));
+//  if(ideSize != realSize) {
+//    Serial.println("Flash Chip configuration wrong!\r\n");
+//  } else {
+//    Serial.println("Flash Chip configuration ok.\r\n");
+//  }
  
   if(!SPIFFS.begin()) {
     Serial.println("SPIFFS!");
@@ -279,8 +315,14 @@ void setup() {
   readConfig();
   setupWiFi();
 
-  getDTime();
-  log1(st1);
+  delay(1250);
+  getParms();
+  for(i=0; i<NOCFGSTR; i++) {
+    if(strk[i].stfin != 0) {
+      Serial.printf(" *%d (%s): %s *\n", i, strk[i].st2, strk[i].st1);
+    }
+  }
+  log1(strk[0].st1);
 
   wifi_set_sleep_type(LIGHT_SLEEP_T);
 }
@@ -305,18 +347,18 @@ void loop() {
   if(WiFi.status() != WL_CONNECTED) {
     setupWiFi();
   }
-  if(getDTime()) {
-    Serial.printf("Vri: %s;\r\n", st1);
-  }
+//  if(getParms()) {
+//    Serial.printf("Vri: %s;\r\n", st1);
+//  }
   drvaIugljen();
 
-  Serial.printf("Delaying for %d0 seconds...\r\n", SLEEP_DELAY_IN_TENS_OF_SECONDS);
-  i=SLEEP_DELAY_IN_TENS_OF_SECONDS;
+  Serial.printf("Delaying for %d seconds...\r\n", SLEEP_DELAY_IN_SECONDS);
+  i=SLEEP_DELAY_IN_SECONDS;
   while(i-- > 0) {
-    delay(10000);
+    delay(1000);
   }
 //  WiFi.forceSleepBegin();
-//  delay(10000 * SLEEP_DELAY_IN_TENS_OF_SECONDS);
+//  delay(10000 * SLEEP_DELAY_IN_SECONDS);
   Serial.println("");
 }
 
