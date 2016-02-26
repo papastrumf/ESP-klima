@@ -10,7 +10,6 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <FS.h>
-#include <WiFiUdp.h>
 #include <SSD1306.h>
 #include <SSD1306Ui.h>
 #include <SPI.h>
@@ -33,16 +32,16 @@ char password[2][20];
 const char* greetmsg = "\rKlima za po doma,  ver. 0.4 (c) kek0 2016.";
 int led = 2, i, j, chipID, Vcc;
 unsigned int localPort = 1245, httpPort = 80;
-char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
-char st1[STBUF], st2[NOCFGSTR][8] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "INVL: ", "WUIV: " };
+const char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
+char st1[STBUF], st2[NOCFGSTR][9] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "INVL: ", "WUIV: " };
 
-struct _strk {
+/*struct _strk {
   char st1[STBUF];
   char st2[15];
   int stfnd;
   int stfin;
   int st2len;
-} strk[NOCFGSTR];
+} strk[NOCFGSTR];*/
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
@@ -103,7 +102,7 @@ bool setupWiFi() {
       Serial.print ( "." );
     }
     if(j == 21){
-      Serial.printf("\r\nCould not connect to %s", ssid[i]);
+      Serial.printf("\r\nCould not connect to %s", WiFiSSID);
       if(i==1) {
         log1("No WiFi!");
         return(false);
@@ -113,6 +112,7 @@ bool setupWiFi() {
       //Serial.print("  IP: ");
       //Serial.println(WiFi.localIP());
       //Serial.setDebugOutput(true);
+      //Serial.setDebugOutput(false);
       //WiFi.printDiag(Serial);
     }
   }
@@ -121,8 +121,8 @@ bool setupWiFi() {
 
 int getParms() {
   char in[STBUF];
-  char _st1[25][NOCFGSTR];
-  char _st2[15][NOCFGSTR];
+  char _st1[NOCFGSTR][70];
+  char _st2[NOCFGSTR][15];
   int _stfnd[NOCFGSTR];
   int _stfin[NOCFGSTR];
   int _st2len[NOCFGSTR];
@@ -132,13 +132,13 @@ int getParms() {
     _stfnd[i]=0;        // broj poklapanih znakova
     _stfin[i]=0;        // nadjeno poklapanje
     _st2len[i] = strlen(st2[i]);
-    _st1[0][i] = '\0';
-//    strcpy(_st2[i], st2[i]);
+    _st1[i][0] = '\0';
+    strcpy(_st2[i], st2[i]);
   }
-
+  
   delay(150);
   if (!client.connect(webSrv, httpPort)) {
-    Serial.println("connection to server failed [p]");
+    Serial.printf("connection to server %s:%d failed [p]\r\n", webSrv, httpPort);
     return 0;
   }
   sprintf(st1, "GET /vatra/pali?ci=%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", chipID, webSrv);
@@ -148,6 +148,7 @@ int getParms() {
   Serial.printf("getParms:1\r\n");
   // Read all the lines of the reply from server
   j=0;
+  return 0; ////
   while(client.available()){
     in[j] = client.read();
     for(i=0; i<NOCFGSTR; i++) {
@@ -176,6 +177,7 @@ int getParms() {
       j++;
     }
   }
+  client.stop();
   return 0;
 }
 
@@ -183,18 +185,23 @@ int drvaIugljen() {
   String line;
 
   if (!client.connect(webSrv, httpPort)) {
-    Serial.println("connection to server failed.");
+    Serial.printf("connection to server %s:%d failed.\r\n", webSrv, httpPort);
     return -1;
   }
   digitalWrite(led, 0);
   sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
-                      chipID, temperatureString, Vcc/1000, Vcc%1000, webSrv);
+                      chipID, temperatureString, webSrv);
   client.print(st1);
-  delay(250);
+//  sprintf(st1, "/vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d", chipID, temperatureString, Vcc/1000, Vcc%1000, webSrv);
+//  client.print(String("GET ") + String(st1) + " HTTP/1.1\r\n");
+//  client.print("Host: " + String(webSrv) + "\r\n");
+//  client.print("Connection: close\r\n\r\n");
+  delay(200);
   while(client.available()){
     line = client.readStringUntil('\n');
     Serial.println(line);
   }
+//  client.stop();
   digitalWrite(led, 1);
 //  http.begin(webSrv, 80, "/vatra/ajde/?ci=%08x&t0=%stest.html"); //HTTP
   return 0;
@@ -232,7 +239,7 @@ int readConfig() {
       return 0;
     param = (char **)malloc(sizeof(char *) * parmc);
     val = (char **)malloc(sizeof(char *) * parmc);
-    while(f1.available()) {
+    while(f1.available() && i < parmc) {
       param[i] = (char *)malloc(8);
       val[i] = (char *)malloc(15);
       //f1.scanf(f1, "%4s=%s\n", param[i], val[i]);
@@ -315,20 +322,20 @@ void setup() {
   readConfig();
   setupWiFi();
 
-  delay(1250);
-  getParms();
-  for(i=0; i<NOCFGSTR; i++) {
-    if(strk[i].stfin != 0) {
-      Serial.printf(" *%d (%s): %s *\n", i, strk[i].st2, strk[i].st1);
-    }
-  }
-  log1(strk[0].st1);
+  delay(250);
+//  getParms();
+//  for(i=0; i<NOCFGSTR; i++) {
+//    if(strk[i].stfin != 0) {
+//      Serial.printf(" *%d (%s): %s *\n", i, strk[i].st2, strk[i].st1);
+//    }
+//  }
+//  log1(strk[0].st1);
 
   wifi_set_sleep_type(LIGHT_SLEEP_T);
 }
 
 void loop() {
-  char msgbuf[80];
+//  char msgbuf[80];
   float temperature;
 
   //if (!client.connected()) {
