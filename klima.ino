@@ -1,5 +1,5 @@
 /*
- * ver 0.4
+ * ver 0.3.8
  * 
  * Sources:
  * http://www.jerome-bernard.com/blog/2015/10/04/wifi-temperature-sensor-with-nodemcu-esp8266/
@@ -29,19 +29,20 @@ extern "C" {
 
 char ssid[2][8];
 char password[2][20];
-const char* greetmsg = "\rKlima za po doma,  ver. 0.4 (c) kek0 2016.";
+const char* greetmsg = "\rKlima za po doma,  ver. 0.3.8 (c) kek0 2016.";
 int led = 2, i, j, chipID, Vcc;
 unsigned int localPort = 1245, httpPort = 80;
-const char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
-char st1[STBUF], st2[NOCFGSTR][9] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "INVL: ", "WUIV: " };
+char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
+char st1[STBUF];
+char st2[NOCFGSTR][9] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "INVL: ", "WUIV: " };
 
-/*struct _strk {
+struct _strk {
   char st1[STBUF];
   char st2[15];
   int stfnd;
   int stfin;
   int st2len;
-} strk[NOCFGSTR];*/
+} strk[NOCFGSTR];
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
@@ -121,63 +122,81 @@ bool setupWiFi() {
 
 int getParms() {
   char in[STBUF];
-  char _st1[NOCFGSTR][70];
-  char _st2[NOCFGSTR][15];
+/*  char _st1[NOCFGSTR][STBUF];
+  char _st2[NOCFGSTR][9];
   int _stfnd[NOCFGSTR];
   int _stfin[NOCFGSTR];
-  int _st2len[NOCFGSTR];
+  int _st2len[NOCFGSTR];  */
 
-  //Serial.printf("getParms %d\r\n", sizeof(strk));
+  Serial.printf("getParms:1\r\n");
   for(i=0; i<NOCFGSTR; i++) {
-    _stfnd[i]=0;        // broj poklapanih znakova
-    _stfin[i]=0;        // nadjeno poklapanje
-    _st2len[i] = strlen(st2[i]);
-    _st1[i][0] = '\0';
-    strcpy(_st2[i], st2[i]);
+    strk[i].stfnd=0;        // broj poklapanih znakova
+    strk[i].stfin=0;        // nadjeno poklapanje
+    strk[i].st2len = strlen(st2[i]);
+    strk[i].st1[0] = '\0';
+//    strcpy(strk[i].st2, st2[i]);
   }
   
   delay(150);
-  if (!client.connect(webSrv, httpPort)) {
+  i=0;
+  while(!client.connect(webSrv, httpPort) && i<5) {
+    Serial.printf(" > %d\t", i);
+    delay(200);
+    i++;
+  }
+  if(i==5) {
     Serial.printf("connection to server %s:%d failed [p]\r\n", webSrv, httpPort);
     return 0;
   }
-  sprintf(st1, "GET /vatra/pali?ci=%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", chipID, webSrv);
+  sprintf(st1, "GET /vatra/pali?ci=%08x HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", chipID, webSrv);
   client.print(st1);
-  delay(150);
 
-  Serial.printf("getParms:1\r\n");
+  delay(100);
   // Read all the lines of the reply from server
   j=0;
-  return 0; ////
-  while(client.available()){
+  Serial.printf("\r\ngetParms:2\r\n");
+  while(client.available()) {
     in[j] = client.read();
+    //Serial.printf("{%c:", in[j]);
+    //Serial.printf("%c", in[j]);
     for(i=0; i<NOCFGSTR; i++) {
-      if(j < _st2len[i]) {
-        if(in[j] == _st2[i][j]) {
-          _stfnd[i]++;
+      //Serial.printf("%c%%", st2[i][j]);
+      if(j < strk[i].st2len) {
+        if(in[j] == st2[i][j]) {
+          //Serial.print("\\");
+          strk[i].stfnd++;
         }
-      } else if(_stfnd[i] == _st2len[i]) {
-        _st1[i][j- _st2len[i]] = in[j];
+      } else if(strk[i].stfnd == strk[i].st2len) {
+        //Serial.printf("%d#", i);
+        strk[i].st1[j- strk[i].st2len] = in[j];
       }
     }
+    //Serial.println("");
 
     if(in[j] == '\r' || in[j] == '\n' || j == STBUF-1) {
       for(i=0; i<NOCFGSTR; i++) {
-//        printf("[%d,%d]: %s;\n", j, strk[i].stfnd[i], strk[i].st1[i]);
-        if(_stfnd[i] == _st2len[i] && !_stfin[i]) {
-          _st1[i][j- _st2len[i]] = '\0';
-//          printf("\n%%%d K: %s;\n", i, strk[i].st1);
-          _stfin[i] = 1;
-        } else {
-          _stfnd[i]=0;
+//        Serial.printf("[%d,%d]: %s;\r\n", j, _stfnd[i], _st1[i]);
+        if((strk[i].stfnd == strk[i].st2len) && (strk[i].stfin == 0)) {
+          strk[i].st1[j- strk[i].st2len] = '\0';
+//          Serial.printf("\n%%%d K: %s;\r\n", i, strk[i].st1);
+//          Serial.printf("\n%%%d K: %s;\r\n", i, _st1[i]);
+          strk[i].stfin = 1;
         }
+        strk[i].stfnd=0;
       }
+      //Serial.println("\r\n");
       j=0;
     } else {
       j++;
     }
+//    delay(10);
   }
   client.stop();
+//  for(i=0; i<NOCFGSTR; i++) {
+//    if(strk[i].stfin != 0) {
+//      Serial.printf(" *%d (%s): %s *\r\n", i, st2[i], strk[i].st1);
+//    }
+//  }
   return 0;
 }
 
@@ -190,7 +209,7 @@ int drvaIugljen() {
   }
   digitalWrite(led, 0);
   sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
-                      chipID, temperatureString, webSrv);
+                      chipID, temperatureString, Vcc/1000, Vcc%1000, webSrv);
   client.print(st1);
 //  sprintf(st1, "/vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d", chipID, temperatureString, Vcc/1000, Vcc%1000, webSrv);
 //  client.print(String("GET ") + String(st1) + " HTTP/1.1\r\n");
@@ -200,6 +219,7 @@ int drvaIugljen() {
   while(client.available()){
     line = client.readStringUntil('\n');
     Serial.println(line);
+    delay(10);
   }
 //  client.stop();
   digitalWrite(led, 1);
@@ -323,12 +343,12 @@ void setup() {
   setupWiFi();
 
   delay(250);
-//  getParms();
-//  for(i=0; i<NOCFGSTR; i++) {
-//    if(strk[i].stfin != 0) {
-//      Serial.printf(" *%d (%s): %s *\n", i, strk[i].st2, strk[i].st1);
-//    }
-//  }
+  getParms();
+  for(i=0; i<NOCFGSTR; i++) {
+    if(strk[i].stfin != 0) {
+      Serial.printf(" *%d (%s): %s *\n", i, st2[i], strk[i].st1);
+    }
+  }
 //  log1(strk[0].st1);
 
   wifi_set_sleep_type(LIGHT_SLEEP_T);
@@ -354,9 +374,6 @@ void loop() {
   if(WiFi.status() != WL_CONNECTED) {
     setupWiFi();
   }
-//  if(getParms()) {
-//    Serial.printf("Vri: %s;\r\n", st1);
-//  }
   drvaIugljen();
 
   Serial.printf("Delaying for %d seconds...\r\n", SLEEP_DELAY_IN_SECONDS);
