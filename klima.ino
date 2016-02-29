@@ -1,5 +1,5 @@
 /*
- * ver 0.3.8
+ * ver 0.4
  * 
  * Sources:
  * http://www.jerome-bernard.com/blog/2015/10/04/wifi-temperature-sensor-with-nodemcu-esp8266/
@@ -22,27 +22,34 @@ extern "C" {
 }
 
 
-#define SLEEP_DELAY_IN_SECONDS  40
 #define ONE_WIRE_BUS            4               // DS18B20 pin
 #define STBUF                   120
 #define NOCFGSTR                8
 
 char ssid[2][8];
 char password[2][20];
-const char* greetmsg = "\rKlima za po doma,  ver. 0.3.8 (c) kek0 2016.";
+const char* greetmsg = "\rKlima za po doma,  ver. 0.4 (c) kek0 2016.";
 int led = 2, i, j, chipID, Vcc;
 unsigned int localPort = 1245, httpPort = 80;
 char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
-char st1[STBUF];
-char st2[NOCFGSTR][9] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "INVL: ", "WUIV: " };
+char st1[STBUF], paramURI[50],  WiFiSSID[15], WiFipswd[25];
+char st2[NOCFGSTR][9] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "TCIV: ", "WUIM: " };
+                        // T1CR - Temp1 correction            [def: 0]
+                        // TMZC - timezone (client side)      [CET]
+                        // HSRZ - histeresis (temp1)          [0.5]
+                        // TCIV - temperature check interval  [2min = 120s]
+                        // WUIM - web update interval multiplier
+                        //        (INVL * WUIM = 8 min)       [4]
+int parmT1CR, parmTCIV, parmHSRZ, parmWUIM;
+char parmTMZC[5];
 
 struct _strk {
-  char st1[STBUF];
-  char st2[15];
+  char st1[25];
+  char st2[8];
   int stfnd;
   int stfin;
   int st2len;
-} strk[NOCFGSTR];
+} Parms[NOCFGSTR];
 
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature DS18B20(&oneWire);
@@ -57,6 +64,21 @@ void log1(const char *lmsg) {
     fi.seek(0, SeekEnd);
     fi.printf("[%d] %s", millis()/1000, lmsg);
     fi.close();
+  }
+}
+
+void readLog1() {
+  String line;
+  
+  File fi = SPIFFS.open("/log.0", "r");
+  if(fi) {
+  Serial.println("===== Log =====");
+    while(fi.available()) {
+      line=fi.readStringUntil('\n');
+      Serial.println(line);
+    }
+    fi.close();
+    Serial.println("=====");
   }
 }
 
@@ -78,8 +100,6 @@ float getTemperature() {
 
 bool setupWiFi() {
   int k, notchos=1;
-  char WiFiSSID[15];
-  char WiFipswd[25];
 
   i = WiFi.scanNetworks();
   if (i == 0)
@@ -122,67 +142,38 @@ bool setupWiFi() {
 
 int getParms() {
   char in[STBUF];
-/*  char _st1[NOCFGSTR][STBUF];
-  char _st2[NOCFGSTR][9];
-  int _stfnd[NOCFGSTR];
-  int _stfin[NOCFGSTR];
-  int _st2len[NOCFGSTR];  */
 
-  Serial.printf("getParms:1\r\n");
-  for(i=0; i<NOCFGSTR; i++) {
-    strk[i].stfnd=0;        // broj poklapanih znakova
-    strk[i].stfin=0;        // nadjeno poklapanje
-    strk[i].st2len = strlen(st2[i]);
-    strk[i].st1[0] = '\0';
-//    strcpy(strk[i].st2, st2[i]);
-  }
-  
-  delay(150);
-  i=0;
-  while(!client.connect(webSrv, httpPort) && i<5) {
-    Serial.printf(" > %d\t", i);
-    delay(200);
-    i++;
-  }
-  if(i==5) {
-    Serial.printf("connection to server %s:%d failed [p]\r\n", webSrv, httpPort);
-    return 0;
-  }
-  sprintf(st1, "GET /vatra/pali?ci=%08x HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", chipID, webSrv);
-  client.print(st1);
-
-  delay(100);
+//  Serial.printf("getParms:1\r\n");
   // Read all the lines of the reply from server
   j=0;
-  Serial.printf("\r\ngetParms:2\r\n");
+//  Serial.printf("\r\ngetParms:2\r\n");
   while(client.available()) {
     in[j] = client.read();
     //Serial.printf("{%c:", in[j]);
     //Serial.printf("%c", in[j]);
     for(i=0; i<NOCFGSTR; i++) {
       //Serial.printf("%c%%", st2[i][j]);
-      if(j < strk[i].st2len) {
+      if(j < Parms[i].st2len) {
         if(in[j] == st2[i][j]) {
           //Serial.print("\\");
-          strk[i].stfnd++;
+          Parms[i].stfnd++;
         }
-      } else if(strk[i].stfnd == strk[i].st2len) {
+      } else if(Parms[i].stfnd == Parms[i].st2len) {
         //Serial.printf("%d#", i);
-        strk[i].st1[j- strk[i].st2len] = in[j];
+        Parms[i].st1[j- Parms[i].st2len] = in[j];
       }
     }
     //Serial.println("");
 
     if(in[j] == '\r' || in[j] == '\n' || j == STBUF-1) {
       for(i=0; i<NOCFGSTR; i++) {
-//        Serial.printf("[%d,%d]: %s;\r\n", j, _stfnd[i], _st1[i]);
-        if((strk[i].stfnd == strk[i].st2len) && (strk[i].stfin == 0)) {
-          strk[i].st1[j- strk[i].st2len] = '\0';
-//          Serial.printf("\n%%%d K: %s;\r\n", i, strk[i].st1);
-//          Serial.printf("\n%%%d K: %s;\r\n", i, _st1[i]);
-          strk[i].stfin = 1;
+//        Serial.printf("[%d,%d]: %s;\r\n", j, _Parms[i].stfnd, Parms[i].st1);
+        if((Parms[i].stfnd == Parms[i].st2len) && (Parms[i].stfin == 0)) {
+          Parms[i].st1[j- Parms[i].st2len] = '\0';
+//          Serial.printf("\n%%%d K: %s;\r\n", i, Parms[i].st1);
+          Parms[i].stfin = 1;
         }
-        strk[i].stfnd=0;
+        Parms[i].stfnd=0;
       }
       //Serial.println("\r\n");
       j=0;
@@ -192,38 +183,6 @@ int getParms() {
 //    delay(10);
   }
   client.stop();
-//  for(i=0; i<NOCFGSTR; i++) {
-//    if(strk[i].stfin != 0) {
-//      Serial.printf(" *%d (%s): %s *\r\n", i, st2[i], strk[i].st1);
-//    }
-//  }
-  return 0;
-}
-
-int drvaIugljen() {
-  String line;
-
-  if (!client.connect(webSrv, httpPort)) {
-    Serial.printf("connection to server %s:%d failed.\r\n", webSrv, httpPort);
-    return -1;
-  }
-  digitalWrite(led, 0);
-  sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
-                      chipID, temperatureString, Vcc/1000, Vcc%1000, webSrv);
-  client.print(st1);
-//  sprintf(st1, "/vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d", chipID, temperatureString, Vcc/1000, Vcc%1000, webSrv);
-//  client.print(String("GET ") + String(st1) + " HTTP/1.1\r\n");
-//  client.print("Host: " + String(webSrv) + "\r\n");
-//  client.print("Connection: close\r\n\r\n");
-  delay(200);
-  while(client.available()){
-    line = client.readStringUntil('\n');
-    Serial.println(line);
-    delay(10);
-  }
-//  client.stop();
-  digitalWrite(led, 1);
-//  http.begin(webSrv, 80, "/vatra/ajde/?ci=%08x&t0=%stest.html"); //HTTP
   return 0;
 }
 
@@ -264,18 +223,27 @@ int readConfig() {
       val[i] = (char *)malloc(15);
       //f1.scanf(f1, "%4s=%s\n", param[i], val[i]);
       line = f1.readStringUntil('\n');
-      //Serial.printf("li[%d]: %s;\r\n", i, line.c_str());
+      Serial.printf("li[%d]: %s;\r\n", i, line.c_str());
       //sscanf(line, "%4s=%s\n", param[i], val[i]);
       strcpy(param[i], line.substring(0, line.indexOf("=")).c_str());
       strcpy(val[i], line.substring(strlen(param[i]) +1).c_str());
       i++;
     }
     f1.close();
+    paramURI[0] = '\0';
     for(i=0; i<parmc; i++) {
       if(!strcmp(param[i], "SSID"))
         strcpy(ssid[1], val[i]);
-      if(!strcmp(param[i], "WPSW"))
+      else if(!strcmp(param[i], "WPSW"))
         strcpy(password[1], val[i]);
+      else {
+        for(j=3; j<NOCFGSTR; j++) {
+          if(!strncmp(Parms[j].st2, param[i], 4)) {
+            strcpy(Parms[j].st1, val[i]);
+            sprintf(paramURI, "%s&%s=%s", paramURI, param[i], val[i]);
+          }
+        }
+      }
       //Serial.printf("%d: %s => %s\r\n", i, param[i], val[i]);
     }
     for(i=0; i<parmc; i++) {
@@ -286,17 +254,86 @@ int readConfig() {
     free(val);
   } else {
     f1 = SPIFFS.open(cfg_dat, "a");
-    f1.printf("KVPM=%x\n", 0x23);
+    f1.printf("KVPM=%x\n", 0x27);
     f1.printf("SSID=IDA\n");
     f1.printf("WPSW=gU2dR!c4\n");
-    f1.printf("TMZC=CEST\n");
+    f1.printf("T1CR=0\n");
+    f1.printf("TMZC=CET\n");
+    f1.printf("HSRZ=0.5\n");
+    f1.printf("TCIV=120\n");
+    f1.printf("WUIM=4\n");
     f1.close();
   }
   return(0);
 }
 
-void setup() {
+int saveConfig() {
+  char parmNam[5];
+  int ver_parmc;
+  File f1;
+  
+  j=0;
+  strcpy(st1, "");
+  for(i=3; i<NOCFGSTR; i++) {
+    if(strlen(Parms[i].st1) > 0) {
+      strncpy(parmNam, Parms[i].st2, 4);
+      parmNam[4] = '\0';              // strncpy ne stavlja '\0' na kraj
+      sprintf(st1, "%s\n%s=%s", st1, parmNam, Parms[i].st1);
+      j++;
+    }
+  }
+  ver_parmc = 0x20 + 2 + j;
+  f1 = SPIFFS.open(cfg_dat, "w");
+  f1.printf("KVPM=%x\n", ver_parmc);
+  f1.printf("SSID=%s\nWPSW=%s", WiFiSSID, WiFipswd);
+  f1.print(st1);
+//  Serial.println(st1);
+  f1.close();
+}
 
+int drvaIugljen() {
+  String line;
+
+  i=0;
+  while(!client.connect(webSrv, httpPort) && i<5) {
+    Serial.printf(" > %d\t", i);
+    delay(200);
+    i++;
+  }
+  if(i==5) {
+    Serial.printf("connection to server %s:%d failed.\r\n", webSrv, httpPort);
+    return -1;
+  }
+  digitalWrite(led, 0);
+  sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+                      chipID, temperatureString, Vcc/1000, Vcc%1000, webSrv);
+  client.print(st1);
+  delay(100);
+  while(client.available()){
+    line = client.readStringUntil('\n');
+    Serial.println(line);
+    delay(25);
+  }
+  getParms();
+  j=0;
+  for(i=3; i<NOCFGSTR; i++) {
+    if(Parms[i].stfin != 0) {
+      j++;
+      Serial.printf(" %%%d (%s): %s *\r\n", i, st2[i], Parms[i].st1);
+      Parms[i].stfin=0;
+    }
+  }
+  if(j > 0) {
+    saveConfig();
+  }
+
+//  client.stop();
+  digitalWrite(led, 1);
+//  http.begin(webSrv, 80, "/vatra/ajde/?ci=%08x&t0=%stest.html"); //HTTP
+  return 0;
+}
+
+void setup() {
   delay(2500);
   Serial.begin(115200);
   Serial.println ( greetmsg );
@@ -336,20 +373,46 @@ void setup() {
     if(dir.fileName() == "/log.0" && dir.fileSize() >= 32700)
       SPIFFS.rename("/log.0", "/log.1");
   }
+  //readLog1();
 
   strcpy(ssid[0], "kek0");
   strcpy(password[0], "k1ju4wIf");
+  for(i=0; i<NOCFGSTR; i++) {
+    Parms[i].stfnd=0;        // broj poklapanih znakova
+    Parms[i].stfin=0;        // nadjeno poklapanje
+    Parms[i].st2len = strlen(st2[i]);
+    Parms[i].st1[0] = '\0';
+    strcpy(Parms[i].st2, st2[i]);
+  }
+
   readConfig();
   setupWiFi();
 
   delay(250);
-  getParms();
-  for(i=0; i<NOCFGSTR; i++) {
-    if(strk[i].stfin != 0) {
-      Serial.printf(" *%d (%s): %s *\n", i, st2[i], strk[i].st1);
+  i=0;
+  while(!client.connect(webSrv, httpPort) && i<5) {
+    Serial.printf(" > %d\t", i);
+    delay(200);
+    i++;
+  }
+  if(i==5) {
+    Serial.printf("connection to server %s:%d failed [p]\r\n", webSrv, httpPort);
+  } else {
+    sprintf(st1, "GET /vatra/pali?ci=%08x%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", chipID, paramURI, webSrv);
+    client.print(st1);
+    delay(100);
+    getParms();
+    for(i=0; i<NOCFGSTR; i++) {
+      if(Parms[i].stfin != 0) {
+        Serial.printf(" *%d (%s): %s *\r\n", i, st2[i], Parms[i].st1);
+      }
     }
   }
-//  log1(strk[0].st1);
+//  log1(Parms[0].st1);
+  saveConfig();
+  for(i=0; i<NOCFGSTR; i++) {
+    Parms[i].stfin=0;        // nadjeno poklapanje
+  }
 
   wifi_set_sleep_type(LIGHT_SLEEP_T);
 }
@@ -376,13 +439,12 @@ void loop() {
   }
   drvaIugljen();
 
-  Serial.printf("Delaying for %d seconds...\r\n", SLEEP_DELAY_IN_SECONDS);
-  i=SLEEP_DELAY_IN_SECONDS;
+  Serial.printf("Delaying for %d seconds...\r\n", parmTCIV * parmWUIM);
+  parmTCIV=120; parmWUIM=4;
+  i=parmTCIV * parmWUIM;
   while(i-- > 0) {
     delay(1000);
   }
-//  WiFi.forceSleepBegin();
-//  delay(10000 * SLEEP_DELAY_IN_SECONDS);
   Serial.println("");
 }
 
