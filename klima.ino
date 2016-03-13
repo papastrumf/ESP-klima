@@ -1,28 +1,27 @@
 /*
- * ver 0.4.5
+ * ver 0.4.7
  * 
  * Sources:
  * http://www.jerome-bernard.com/blog/2015/10/04/wifi-temperature-sensor-with-nodemcu-esp8266/
  * https://github.com/esp8266/Arduino/issues/1381
+ * http://www.esp8266.com/wiki/doku.php?id=esp8266_gpio_pin_allocations
+ * http://cholla.mmto.org/esp8266/pins/
+ * https://github.com/mozgy/esp8266/blob/master/WiFi_OLED/Mozz_WiFi_OLED
  */
 
 #include <ESP8266WiFi.h>
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <FS.h>
-//#include <SSD1306.h>
-//#include <SSD1306Ui.h>
 #include <ESP_SSD1306.h>
 #include <Adafruit_GFX.h>
 #include <SPI.h>
 #include <Wire.h>
 //#include <ESP8266HTTPClient.h>
-//#include <U8glib.h>
 extern "C" {
   #include "gpio.h"
-}
-extern "C" {
   #include "user_interface.h"
+  uint32_t readvdd33(void);
 }
 
 #define D0                      16              // GPIO16
@@ -34,8 +33,6 @@ extern "C" {
 #define D6                      12              // GPIO12
 #define D7                      13              // GPIO13
 #define D8                      15              // GPIO15
-//#define OLED_MOSI               7               // SD0
-//#define OLED_CLK                6               // CLK
 #define OLED_MOSI               13              // HMOSI
 #define OLED_CLK                14              // HCLK
 #define OLED_DC                 5               // D1
@@ -47,8 +44,9 @@ extern "C" {
 
 char ssid[2][8];
 char password[2][20];
-const char* greetmsg = "\rKlima za po doma,  ver. 0.4.5 (c) kek0 2016.";
-int led = 2, i, j, chipID, Vcc;
+const char* greetmsg = "\rKlima za po doma,  ver. %s (c) kek0 2016.\r\n";
+const char* vers = "0.4.7";
+int led = 2, i, j, chipID, Vcc, dlyc1 = 0;
 unsigned int localPort = 1245, httpPort = 80;
 char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
 char st1[STBUF], paramURI[STBUF],  WiFiSSID[15], WiFipswd[25];
@@ -79,6 +77,7 @@ static const unsigned char PROGMEM logo16_glcd_bmp[] = {
   B01111100, B11110000,
   B01110000, B01110000,
   B00000000, B00110000 };
+bool grijanjeRadi = false;
 
 struct _strk {
   char st1[40];
@@ -93,8 +92,6 @@ DallasTemperature DS18B20(&oneWire);
 char temperatureString[6];
 ADC_MODE(ADC_VCC);
 WiFiClient client;
-//SSD1306 display(0x3c, D1, D0);        // D1: SDA. D0: SDC
-//U8GLIB_SSD1306_128X64 u8g(OLED_CLK, OLED_MOSI, OLED_CS, OLED_DC, OLED_RST);
 ESP_SSD1306 display(OLED_DC, OLED_RST, OLED_CS);
 
 
@@ -139,6 +136,7 @@ float getTemperature() {
 
 bool setupWiFi() {
   int k, notchos=1;
+  char prgrs[6] = "-\\|/";
 
   i = WiFi.scanNetworks();
   if (i == 0)
@@ -156,10 +154,21 @@ bool setupWiFi() {
     Serial.printf("\r\nConnecting to %s", WiFiSSID);
     WiFi.mode(WIFI_STA);
     WiFi.begin(WiFiSSID, WiFipswd);
+    display.printf("%s ", WiFiSSID);
+    display.display();
     j = 0;
     while (WiFi.status() != WL_CONNECTED && j++ < 20) {
       delay(500);
       Serial.print ( "." );
+      display.setCursor(42+ 6*strlen(WiFiSSID), 8);
+      display.setTextColor(BLACK);
+      display.write(prgrs[(j+3)%4]);
+      display.display();
+      display.setCursor(42+ 6*strlen(WiFiSSID), 8);
+//      display.printf("WiFi: %s %c\r", WiFiSSID, prgrs[j%4]);
+      display.setTextColor(WHITE);
+      display.write(prgrs[j%4]);
+      display.display();
     }
     if(j == 21){
       Serial.printf("\r\nCould not connect to %s", WiFiSSID);
@@ -172,7 +181,6 @@ bool setupWiFi() {
       //Serial.print("  IP: ");
       //Serial.println(WiFi.localIP());
       //Serial.setDebugOutput(true);
-      //Serial.setDebugOutput(false);
       //WiFi.printDiag(Serial);
     }
   }
@@ -183,16 +191,16 @@ void parmStr2Var(int vi) {
   if(Parms[vi].stfin == 1) {
     switch(vi) {
       case 2:         // Temp1
-        parmTemp1 = atof(Parms[vi].st1);
+        parmTemp1 = (float)atof(Parms[vi].st1);
         break;
       case 3:         // T1CR
-        parmT1CR = atof(Parms[vi].st1);
+        parmT1CR = (float)atof(Parms[vi].st1);
         break;
       case 4:         // TMZC
         strcpy(parmTMZC, Parms[vi].st1);
         break;
       case 5:         // HSRZ
-        parmHSRZ = atof(Parms[vi].st1);
+        parmHSRZ = (float)atof(Parms[vi].st1);
         break;
       case 6:         // TCIV
         parmTCIV = atoi(Parms[vi].st1);
@@ -229,7 +237,6 @@ int getParms() {
 
     if(in[j] == '\r' || in[j] == '\n' || j == STBUF-1) {
       for(i=0; i<NOCFGSTR; i++) {
-//        Serial.printf("[%d,%d]: %s;\r\n", j, _Parms[i].stfnd, Parms[i].st1);
         if((Parms[i].stfnd == Parms[i].st2len) && (Parms[i].stfin == 0)) {
           Parms[i].st1[j- Parms[i].st2len] = '\0';
           //Serial.printf(" %%P%d %% %s: %s;\r\n", i, Parms[i].st2, Parms[i].st1);
@@ -242,7 +249,6 @@ int getParms() {
     } else {
       j++;
     }
-//    delay(10);
   }
   client.stop();
   delay(100);
@@ -359,7 +365,6 @@ int saveConfig() {
   f1.printf("KVPM=%x\n", ver_parmc);
   f1.printf("SSID=%s\nWPSW=%s", WiFiSSID, WiFipswd);
   f1.print(st1);
-//  Serial.println(st1);
   f1.close();
 }
 
@@ -377,10 +382,8 @@ int drvaIugljen() {
     return -1;
   }
   digitalWrite(led, 0);
-//  chipID = ESP.getChipId();
-//  Serial.printf("chipID: %08x;\r\n", chipID);
-  sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
-                      chipID, temperatureString, Vcc/1000, Vcc%1000, webSrv);
+  sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d%%20Up:%d HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+                      chipID, temperatureString, Vcc/1000, Vcc%1000, millis()/1000, webSrv);
   //Serial.printf("ajde strlen: %d;\r\n", strlen(st1));
   client.print(st1);
   delay(100);
@@ -409,17 +412,49 @@ int drvaIugljen() {
   return 0;
 }
 
+bool ajdeGrijanje() {
+  if(parmTemp0 > 0 && parmTemp0 < 50) {
+    if((parmTemp0 + parmT1CR > parmTemp1 + parmHSRZ /2) && grijanjeRadi) {
+      Serial.println("Gasi grijanje");
+      grijanjeRadi = false;
+    } else if((parmTemp0 + parmT1CR < parmTemp1 - parmHSRZ /2) && !grijanjeRadi) {
+      Serial.println("Pali grijanje");
+      grijanjeRadi = true;
+    }
+    return true;
+  } else {
+    return false;
+  }
+}
+
 void setup() {
-  delay(200);
+  delay(100);
   display.begin(SSD1306_SWITCHCAPVCC);  // Switch OLED
   display.display();
-  delay(2500);
+  delay(1000);
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0,0);
+  for (i=0; i < 168; i++) {
+    if (i == '\n') continue;
+    display.write(i);
+    if ((i > 0) && (i % 21 == 0))
+      display.println();
+  }
+  display.display();
   Serial.begin(115200);
-  Serial.println ( greetmsg );
+  Serial.printf(greetmsg, vers);
   delay(1500);
   pinMode(led, OUTPUT);
   digitalWrite(led, 1);
 
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(0,0);
+  display.printf("ver %s\n", vers);
+  display.display();
   // setup OneWire bus
   DS18B20.begin();
   chipID = ESP.getChipId();
@@ -466,28 +501,23 @@ void setup() {
     strcpy(Parms[i].st2, st2[i]);
   }
 
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0,0);
-  for (i=0; i < 168; i++) {
-    if (i == '\n') continue;
-    display.write(i);
-    if ((i > 0) && (i % 21 == 0))
-      display.println();
-  }
-  display.display();
-
   readConfig();
   for(i=2; i<NOCFGSTR; i++) {
     Parms[i].stfin =1;
-//    Serial.printf(" *parm[%s]: %s;\r\n", Parms[i].st2, Parms[i].st1);
+    //Serial.printf(" *parm[%s]: %s;\r\n", Parms[i].st2, Parms[i].st1);
     parmStr2Var(i);
     Parms[i].stfin =0;
   }
-  setupWiFi();
+  dlyc1 = parmWUIM;
+  display.printf("WiFi: ");
+  display.display();
+  if(setupWiFi())
+    display.printf(" OK\n", WiFiSSID);
+  else
+    display.printf("- -\n");
+  display.display();
 
-  delay(250);
+  delay(500);
   j=0;
   while(!client.connect(webSrv, httpPort) && i<5) {
     Serial.printf("> %d ", i);
@@ -511,60 +541,21 @@ void setup() {
       }
     }
   }
-//  log1(Parms[0].st1);
+  log1(Parms[0].st1);
   saveConfig();
   for(i=0; i<NOCFGSTR; i++) {
-    Parms[i].stfin=0;        // nadjeno poklapanje
+    Parms[i].stfin=0;
   }
 
- wifi_set_sleep_type(LIGHT_SLEEP_T);
-
-/*
-  if ( u8g.getMode() == U8G_MODE_R3G3B2 ) {
-    u8g.setColorIndex(255);     // white
-  }
-  else if ( u8g.getMode() == U8G_MODE_GRAY2BIT ) {
-    u8g.setColorIndex(3);         // max intensity
-  }
-  else if ( u8g.getMode() == U8G_MODE_BW ) {
-    u8g.setColorIndex(1);         // pixel on
-  }
-  else if ( u8g.getMode() == U8G_MODE_HICOLOR ) {
-    u8g.setHiColorByRGB(255,255,255);
-  }
-  u8g.firstPage();  
-  do {
-    // graphic commands to redraw the complete screen should be placed here  
-    u8g.setFont(u8g_font_unifont);
-    //u8g.setFont(u8g_font_osb21);
-    u8g.drawStr( 0, 22, "-Ola!");
-  } while( u8g.nextPage() );
-
-  display.init();
-  display.clear();
-  display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.setFont(ArialMT_Plain_10);
-  display.drawString(20, 25, "Ola!");
-  display.display();
-*/
-/*  
-  for(i=6; i<=11; i++) {
-    pinMode(i, OUTPUT);
-    j=0;
-    while(j++ < i) {
-      digitalWrite(i-5, 1);
-      delay(250);
-      digitalWrite(i-5, 0);
-      delay(250);
-    }
-    delay(500);/
-  }
-*/
+  //wifi_fpm_set_sleep_type(LIGHT_SLEEP_T);
+  wifi_set_sleep_type(LIGHT_SLEEP_T);
 }
 
 void loop() {
 //  char msgbuf[80];
   float temperature;
+  int upH, upM, upS;
+  char grije[5];
 
   //if (!client.connected()) {
   //  reconnect();
@@ -576,38 +567,60 @@ void loop() {
   dtostrf(temperature, 2, 2, temperatureString);
   // send temperature to the serial console
   Serial.printf("Acquired temperature: %s C\r\n", temperatureString);
-  Vcc = ESP.getVcc();
+  //Vcc = ESP.getVcc();
+  Vcc = readvdd33();
   Serial.printf("ESP VCC: %d.%03dV\r\n", Vcc/1000, Vcc%1000);
+
+  if(dlyc1 == parmWUIM) {
+    if(WiFi.status() != WL_CONNECTED) {
+      setupWiFi();
+    }
+    drvaIugljen();
+    dlyc1 = 0;
+  }
+  dlyc1++;
+  if(ajdeGrijanje()) {
+    if(grijanjeRadi)  strcpy(grije, "upal");
+    else strcpy(grije, "ugas");
+  } else strcpy(grije, "*T!*");
+
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
   display.setCursor(0,0);
-  display.printf("- Ola! [%08x]", chipID);
-//  display.setTextColor(BLACK, WHITE); // 'inverted' text
-//  display.println(3.141592);
-//  display.setTextSize(2);
-//  display.setTextColor(WHITE);
+  display.printf(" -Ola!  *%08x", chipID);
   display.drawBitmap(8, 24,  logo16_glcd_bmp, 16, 16, 1);
   display.setCursor(35, 16);
-  display.printf("   T: %sC", temperatureString);
-//  display.write(176);
-//  display.write(67);
+  display.printf("  T0: %sC", temperatureString);
   display.setCursor(35, 28);
-  display.printf(" Vcc: %d.%03dV", Vcc/1000, Vcc%1000);
-//  display.println(0xDEADBEEF, HEX);
+  display.printf("  T1: %d.%02dC", (int)parmTemp1, (int)(parmTemp1*100) %100);
   display.setCursor(35, 40);
-  display.printf("  Up: %ds", millis()/1000);
+  display.printf(" Vcc: %d.%03dV", Vcc/1000, Vcc%1000);
+  //display.println(0xDEADBEEF, HEX);
+  upS = millis() /1000;
+  upH = upS / 3600;
+  upM = (upS - upH * 3600) / 60;
+  upS = upS % 60;
+  display.setCursor(35, 52);
+  display.printf("  Up: %d:%02d:%02d", upH, upM, upS);
+  display.setCursor(0, 52);
+  display.printf("{%s}", grije);
   display.display();
 
-  if(WiFi.status() != WL_CONNECTED) {
-    setupWiFi();
-  }
-  drvaIugljen();
-
-  Serial.printf("Delaying for %d seconds...\r\n", parmTCIV * parmWUIM);
-  i=parmTCIV * parmWUIM / 10;
-  while(i-- > 0) {
-    delay(10000);
+  if(Vcc > 2500) {
+    Serial.printf("Delaying for %d seconds...\r\n", parmTCIV);
+    i=parmTCIV / 10;
+    while(i-- > 0) {
+      delay(10000);
+    }
+  } else {
+    display.clearDisplay();
+    display.printf("* DS * Vcc: %d.%03dV", Vcc/1000, Vcc%1000);
+    display.display();
+    //delay(5000);
+    //display.clearDisplay();
+    //display.display();
+    ESP.deepSleep(900000000, WAKE_RF_DEFAULT);
   }
   Serial.println("");
 }
