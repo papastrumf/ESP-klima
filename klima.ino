@@ -1,5 +1,5 @@
 /*
- * ver 0.4.9
+ * ver 0.5
  * 
  * Sources:
  * http://www.jerome-bernard.com/blog/2015/10/04/wifi-temperature-sensor-with-nodemcu-esp8266/
@@ -44,12 +44,19 @@ extern "C" {
 #define STBUF                   120
 #define NOCFGSTR                8
 #define DEEPSLEEPVOLT           2579
-#define SERIALMSGEN             true
+#define SERIALMSGEN             false
+#define STAT_SLEEP              0x01
+#define STAT_HEATING            0x02            // grijanje radi
+#define STAT_TEMP1_ADJ          0x04            // temperatura postimana na gumb
+#define STAT_BTN1_ON            0x10
+#define STAT_BTN2_ON            0x20
+#define STAT_BTN_PLUS           0x40
+#define DISP_SLEEP              7500            // za 7,5 sek. gasi display i aj spat
 
 char ssid[2][8];
 char password[2][20];
 const char* greetmsg = "\rKlima za po doma,  ver. %s (c) kek0 2016.\r\n";
-const char* vers = "0.4.9";
+const char* vers = "0.5";
 int i, j, chipID, Vcc, dlyc1 = 0;
 unsigned int localPort = 1245, httpPort = 80, syslogPort = 514;
 char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
@@ -97,7 +104,7 @@ static const unsigned char PROGMEM logo32_vatra[] = {
   B00000000, B11110000, B00000111, B00000000, 
   B00000000, B01111000, B00001110, B00000000, 
   B00000000, B00011100, B00011000, B00000000 };
-bool grijanjeRadi = false;
+//bool grijanjeRadi = false;
 struct _strk {
   char st1[40];
   char st2[8];
@@ -114,7 +121,8 @@ WiFiClient client;
 ESP_SSD1306 display(OLED_DC, OLED_RST, OLED_CS);
 WiFiUDP udp;
 IPAddress syslogIPaddress(10, 27, 49, 5);       // log server
-volatile int btnStat1 = 0, btnStat2 = 0;
+volatile int SysStatus = 0;
+long m1s4slp;                                   // milisekundi kad pocinje sleep
 
 
 void log1(const char *lmsg) {
@@ -147,7 +155,7 @@ void readLog1() {
       }
     }
     if(SERIALMSGEN)
-      Serial.println("=====");
+      Serial.println(" ===== ===== ");
     fi.close();
   }
 }
@@ -441,15 +449,17 @@ int drvaIugljen() {
   if(i==5) {
     if(SERIALMSGEN)
       Serial.printf("connection to server failed.\r\n");
-    display.printf("server nedostup.\n");
+    display.printf("\nserver nedostup.\n");
     display.display();
     //return -1;
   } else {
     if(parmTemp1 == 0) {
       strcpy(URI1, "&pm=1");
+    } else if(SysStatus & STAT_TEMP1_ADJ) {
+      sprintf(URI1, "&t1=%d.%02d", (int)parmTemp1, (int)(parmTemp1*100) %100);
     }
-    sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d%%20Up:%d%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
-                        chipID, temperatureString, Vcc/1000, Vcc%1000, millis()/1000, URI1, webSrv);
+    sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+                        chipID, temperatureString, Vcc/1000, Vcc%1000, URI1, webSrv);
     //Serial.printf("ajde strlen: %d;\r\n", strlen(st1));
     client.print(st1);
     delay(100);
@@ -464,8 +474,9 @@ int drvaIugljen() {
         Parms[i].stfin=0;
       }
     }
-    if(j > 0) {
+    if(j > 0 || SysStatus & STAT_TEMP1_ADJ) {
       saveConfig();
+      SysStatus = SysStatus & ~STAT_TEMP1_ADJ;
     }
     return 0;
   }
@@ -474,14 +485,14 @@ int drvaIugljen() {
 
 bool ajdeGrijanje() {
   if(parmTemp0 > 0 && parmTemp0 < 50) {
-    if((parmTemp0 + parmT1CR > parmTemp1 + parmHSRZ /2) && grijanjeRadi) {
+    if((parmTemp0 + parmT1CR > parmTemp1 + parmHSRZ /2) && (SysStatus & STAT_HEATING)) {
       if(SERIALMSGEN)
         Serial.println("Gasi grijanje");
-      grijanjeRadi = false;
-    } else if((parmTemp0 + parmT1CR < parmTemp1 - parmHSRZ /2) && !grijanjeRadi) {
+      SysStatus = SysStatus & ~STAT_HEATING;
+    } else if((parmTemp0 + parmT1CR < parmTemp1 - parmHSRZ /2) && !(SysStatus & STAT_HEATING)) {
       if(SERIALMSGEN)
         Serial.println("Pali grijanje");
-      grijanjeRadi = true;
+      SysStatus = SysStatus | STAT_HEATING;
     }
     return true;
   } else {
@@ -489,41 +500,78 @@ bool ajdeGrijanje() {
   }
 }
 
+void crtajStatus() {
+  display.fillRect(78, 0, 24, 8, BLACK);
+  display.setCursor(78, 0);
+  display.printf("[%02x]", SysStatus);
+  display.display();
+}
+
 void pin_ISR1() {
   int m1s;
 
-  m1s = millis() + 500;
+  if(SysStatus & STAT_SLEEP)  return;
+  m1s4slp = millis() + DISP_SLEEP;
+  m1s = millis() + 200;
+  while(millis() < m1s)  ;
+  SysStatus = SysStatus & ~STAT_SLEEP;
+  SysStatus = SysStatus | STAT_BTN1_ON;
+  crtajStatus();
+  if(SysStatus & STAT_BTN2_ON)  return;
+  parmTemp1 += 0.5;
+  SysStatus = SysStatus | STAT_TEMP1_ADJ;
+  SysStatus = SysStatus | STAT_BTN_PLUS;
+
+  display.fillRect(71, 28, 24, 8, BLACK);
+  display.setCursor(35, 28);
+  display.printf("  T1: %d.%02dC", (int)parmTemp1, (int)(parmTemp1*100) %100);
+  m1s = millis() + 200;
   display.setCursor(0, 8);
   display.print("B1");
   display.display();
   while(millis() < m1s)  ;
-  display.fillRect(0, 8, 11, 15, BLACK);
+  display.fillRect(0, 8, 12, 8, BLACK);
   display.display();
 }
 
 void pin_ISR2() {
   int m1s;
 
-  m1s = millis() + 500;
+  if(SysStatus & STAT_SLEEP)  return;
+  m1s4slp = millis() + DISP_SLEEP;
+  m1s = millis() + 200;
+  while(millis() < m1s)  ;
+  SysStatus = SysStatus & ~STAT_SLEEP;
+  SysStatus = SysStatus | STAT_BTN2_ON;
+  crtajStatus();
+  if(SysStatus & STAT_BTN1_ON)  return;
+  parmTemp1 -= 0.5;
+  SysStatus = SysStatus | STAT_TEMP1_ADJ;
+  SysStatus = SysStatus & ~STAT_BTN_PLUS;
+
+  display.fillRect(71, 28, 24, 8, BLACK);
+  display.setCursor(35, 28);
+  display.printf("  T1: %d.%02dC", (int)parmTemp1, (int)(parmTemp1*100) %100);
+  m1s = millis() + 200;
   display.setCursor(0, 8);
   display.print("B2");
   display.display();
   while(millis() < m1s)  ;
-  display.fillRect(0, 8, 11, 15, BLACK);
+  display.fillRect(0, 8, 12, 8, BLACK);
   display.display();
 }
 
 void setup() {
-  int dlyc2 = 0, imaWiFi = 0;
+  int dlyc2 = 0;
 
   delay(100);
   display.begin(SSD1306_SWITCHCAPVCC);  // Switch OLED
   display.display();
-  delay(1000);
+  delay(500);
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(0,0);
+  display.setCursor(0, 0);
   for (i=0; i < 168; i++) {
     if (i == '\n') continue;
     display.write(i);
@@ -535,7 +583,7 @@ void setup() {
     Serial.begin(115200);
     Serial.printf(greetmsg, vers);
   } else {
-    delay(1500);
+    delay(1000);
     pinMode(RLY_1, OUTPUT);
     digitalWrite(RLY_1, 1);
     delay(250);
@@ -546,15 +594,10 @@ void setup() {
     digitalWrite(RLY_2, 0);
   }
 
-  pinMode(D2, INPUT);
-  pinMode(D3, INPUT);
-  attachInterrupt(D2, pin_ISR1, RISING);
-  attachInterrupt(D3, pin_ISR2, RISING);
-
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(0,0);
+  display.setCursor(0, 0);
   display.printf("ver %s\n", vers);
   display.display();
   // setup OneWire bus
@@ -629,7 +672,6 @@ void setup() {
 //      ESP.restart();        // ne radi!
       break;
     }
-//    delay(2500);
   }
   display.printf(".\n");
   display.display();
@@ -669,14 +711,19 @@ void setup() {
     Parms[i].stfin=0;
   }
 
+  pinMode(D2, INPUT);
+  pinMode(D3, INPUT);
+  attachInterrupt(D2, pin_ISR1, FALLING);
+  attachInterrupt(D3, pin_ISR2, FALLING);
+  //gpio_init(); // Initilise GPIO pins  - NE jer smrda interrupt attachove
   //wifi_fpm_set_sleep_type(LIGHT_SLEEP_T);
-  wifi_set_sleep_type(LIGHT_SLEEP_T);
+  //wifi_set_sleep_type(LIGHT_SLEEP_T);
 }
 
 void loop() {
 //  char msgbuf[80];
   float temperature;
-  int upH, upM, upS;
+  int upH, upM, upS, m1s;
   char grije[5];
 
   temperature = getTemperature();
@@ -690,6 +737,15 @@ void loop() {
     Serial.printf("ESP VCC: %d.%03dV\r\n", Vcc/1000, Vcc%1000);
 
   if(dlyc1 == parmWUIM) {
+    display.setCursor(0,0);
+    display.printf(" WiFi + server", chipID);
+    display.drawBitmap(0, 16,  logo32_vatra, 32, 32, 1);
+    display.setCursor(35, 16);
+    display.printf("  T0: %sC", temperatureString);
+    display.setCursor(35, 28);
+    display.printf("  T1: %d.%02dC", (int)parmTemp1, (int)(parmTemp1*100) %100);
+    display.setCursor(35, 40);
+    display.printf(" Vcc: %d.%03dV", Vcc/1000, Vcc%1000);
     if(WiFi.status() != WL_CONNECTED) {
       if(SERIALMSGEN)
         Serial.println("WiFi reconnect!");
@@ -700,25 +756,25 @@ void loop() {
     drvaIugljen();
     dlyc1 = 0;
   }
-  dlyc1++;
+//  dlyc1++;
   if(ajdeGrijanje()) {
-    if(grijanjeRadi)  strcpy(grije, "upal");
-    else  strcpy(grije, "ugas");
+    if(SysStatus & STAT_HEATING) {
+      strcpy(grije, "upal");
+      if(!SERIALMSGEN)  digitalWrite(RLY_2, 1);
+    }
+    else {
+      strcpy(grije, "ugas");
+      if(!SERIALMSGEN)  digitalWrite(RLY_2, 0);
+    }
   } else  strcpy(grije, "*T!*");
-  if(!SERIALMSGEN) {
-    if(dlyc1 % 2)  digitalWrite(RLY_1, 0);
-    else  digitalWrite(RLY_1, 1);
 //  if(dlyc1 % 2)  Serial.println("Bla: gasi");
 //  else  Serial.println("Bla: pali");
-    if(dlyc1 % 2)  digitalWrite(RLY_2, 1);
-    else  digitalWrite(RLY_2, 0);
-  }
 
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(0,0);
-  display.printf(" -Ola!  *%08x", chipID);
+  display.setCursor(0, 0);
+  display.printf("-%08x-   [%02x]", chipID, SysStatus);
   display.drawBitmap(0, 16,  logo32_vatra, 32, 32, 1);
   display.setCursor(35, 16);
   display.printf("  T0: %sC", temperatureString);
@@ -727,63 +783,75 @@ void loop() {
   display.setCursor(35, 40);
   display.printf(" Vcc: %d.%03dV", Vcc/1000, Vcc%1000);
   //display.println(0xDEADBEEF, HEX);
-  upS = millis() /1000;
-  upH = upS /3600;
-  upM = (upS - upH * 3600) /60;
-  upS = upS % 60;
+  m1s4slp = millis();
+  //upS = (int)m1s4slp /1000;
+  //upH = upS /3600;
+  //upM = (upS - upH * 3600) /60;
+  //upS = upS % 60;
+  m1s4slp += 7500;
+/*
   display.setCursor(35, 52);
   display.printf("  Up: %d:%02d:%02d", upH, upM, upS);
+*/
   display.setCursor(0, 52);
   display.printf("{%s}", grije);
   display.display();
-
   if(Vcc > DEEPSLEEPVOLT) {
-    if(SERIALMSGEN)
-      Serial.printf("Delaying for %d seconds...\r\n", parmTCIV);
-    i=parmTCIV / 10;
-//    i=2;
-    while(i-- > 0) {
-/*
-//                  light sleep (pin wakeup ?)
-      delay(100);
-//      display.clearDisplay();
-      display.fillRect(0, 8, 11, 15, BLACK);
-      display.setCursor(0, 8);
-      display.print("LS");
-      display.display();
-      wifi_station_disconnect();
-      wifi_set_opmode(NULL_MODE);
-      wifi_fpm_set_sleep_type(LIGHT_SLEEP_T);
-//      wifi_set_sleep_type(LIGHT_SLEEP_T);
-      wifi_fpm_open();
-      gpio_pin_wakeup_enable(GPIO_ID_PIN(D4), GPIO_PIN_INTR_HILEVEL);
-      wifi_fpm_do_sleep(0xFFFFFFF);
-//      wifi_fpm_do_sleep(0x2625A00);
-      delay(10000);
+    while(millis() < m1s4slp) {
+      if(digitalRead(D2))  SysStatus = SysStatus & ~STAT_BTN1_ON;
+      else  SysStatus = SysStatus | STAT_BTN1_ON;
+      if(digitalRead(D3))  SysStatus = SysStatus & ~STAT_BTN2_ON;
+      else  SysStatus = SysStatus | STAT_BTN2_ON;
 
-      gpio_pin_wakeup_disable();
-      display.fillRect(0, 8, 11, 15, BLACK);
-      display.setCursor(0, 8);
-      display.print("WU");
-      display.display();
-      wifi_fpm_close();
-      wifi_set_opmode(STATION_MODE);
-      wifi_station_connect();
-      delay(400);
-*/
-      WiFi.forceSleepBegin();
-      delay(10000);
-      WiFi.forceSleepWake();
-//      wifi_station_connect();
+      crtajStatus();
+      if((SysStatus & STAT_BTN1_ON) && (SysStatus & STAT_BTN2_ON)) {
+        if(SysStatus & STAT_BTN_PLUS)  parmTemp1 -= 0.5;  //
+        else  parmTemp1 += 0.5;                           // vrati promjenu T1
+        m1s = millis() + 500;
+        display.setCursor(35, 52);
+        display.printf(" -- menu -- ");
+        display.display();
+        while(millis() < m1s)  ;
+        display.fillRect(35, 52, 72, 8, BLACK);
+      }
+      delay(500);
     }
+    display.clearDisplay();
+    display.display();
+    wifi_fpm_set_sleep_type(LIGHT_SLEEP_T);
+    SysStatus = SysStatus | STAT_SLEEP;
+    delay(200);
+    gpio_pin_wakeup_enable(GPIO_ID_PIN(D2), GPIO_PIN_INTR_LOLEVEL);   // ne radi sa NEGEDGE!
+    gpio_pin_wakeup_enable(GPIO_ID_PIN(D3), GPIO_PIN_INTR_LOLEVEL);
+/*      GPIO_PIN_INTR_DISABLE = 0,
+        GPIO_PIN_INTR_POSEDGE = 1,
+        GPIO_PIN_INTR_NEGEDGE = 2,
+        GPIO_PIN_INTR_ANYEDGE = 3,
+        GPIO_PIN_INTR_LOLEVEL = 4,
+        GPIO_PIN_INTR_HILEVEL = 5       */
+    wifi_fpm_open();
+    wifi_fpm_do_sleep(0xFFFFFFF);
+    delay(100);
+    display.setCursor(78, 0);
+    display.printf("[%02x]", SysStatus);
+    display.display();
+
+//    gpio_pin_wakeup_disable();  NE SMIJE! onemogucuje intr na  tom pinu!
+
+    SysStatus = SysStatus & ~STAT_SLEEP;
+    attachInterrupt(D2, pin_ISR1, FALLING);
+    attachInterrupt(D3, pin_ISR2, FALLING);
+/*      LOW to trigger the interrupt whenever the pin is low,
+        CHANGE to trigger the interrupt whenever the pin changes value
+        RISING to trigger when the pin goes from low to high,
+        FALLING for when the pin goes from high to low. 
+        HIGH to trigger the interrupt whenever the pin is high.       */
+
   } else {
     display.clearDisplay();
     display.setCursor(15, 24);
     display.printf("* DS * Vcc: %d.%03dV", Vcc/1000, Vcc%1000);
     display.display();
-    //delay(250);
-    //display.clearDisplay();
-    //display.display();
     ESP.deepSleep(900000000, WAKE_RF_DEFAULT);
   }
   if(SERIALMSGEN)
