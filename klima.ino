@@ -1,5 +1,5 @@
 /*
- * ver 0.5.2
+ * ver 0.5.4
  * 
  * Sources:
  * http://www.jerome-bernard.com/blog/2015/10/04/wifi-temperature-sensor-with-nodemcu-esp8266/
@@ -27,6 +27,7 @@ extern "C" {
   ADC_MODE(ADC_VCC);
 }
 
+#define VERS                    0x00050400      // 0.5.4
 #define D0                      16              // GPIO16
 #define D1                      5               // GPIO5
 #define D2                      4               // GPIO4
@@ -46,7 +47,6 @@ extern "C" {
 #define STBUF                   120
 #define NOCFGSTR                8
 #define DEEPSLEEPVOLT           2579
-#define SERIALMSGEN             false
 #define STAT_SLEEP              0x01
 #define STAT_HEATING            0x02            // grijanje radi
 #define STAT_TEMP1_ADJ          0x04            // temperatura postimana na gumb
@@ -55,23 +55,27 @@ extern "C" {
 #define STAT_BTN2_ON            0x20
 #define STAT_BTN_PLUS           0x40
 #define DISP_SLEEP              7500            // za 7,5 sek. gasi display i aj spat
+#define MENUSIZ                 3
+#define MENU_EXIT               0
+#define MENU_INFO               1
+#define MENU_SETUP              2
 
-char ssid[2][8];
-char password[2][20];
+
+char ssid[2][8], password[2][20];
 const char* greetmsg = "\rKlima za po doma,  ver. %d.%d.%d (c) kek0 2016.\r\n";
-const int vers[] = { 0, 5, 2 };
 int i, j, chipID, Vcc;
 unsigned int localPort = 1245, httpPort = 80, syslogPort = 514, dlyc1;
 char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
 char st1[STBUF], paramURI[STBUF],  WiFiSSID[15], WiFipswd[25];
-char st2[NOCFGSTR][8] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "TCIV: ", "WUIM: " };
+char st2[NOCFGSTR][8] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "WUIM: ", "SERM: " };
                         // T1CR - Temp1 correction            [def: 0]
                         // TMZC - timezone (client side)      [CET]
                         // HSRZ - histeresis (temp1)          [0.5]
                         // TCIV - temperature check interval  [2min = 120s]
                         // WUIM - web update interval multiplier
-                        //        (TCIV * WUIM = 8 min)       [4]
-int parmTCIV, parmWUIM = 4;
+                        //        (120 sec * WUIM = 8 min)    [4]
+                        // SERM - serial mode setup           [0]
+int parmWUIM = 4, parmSERM;
 float parmTemp0, parmTemp1, parmT1CR, parmHSRZ;
 char parmTMZC[5];
 static const unsigned char PROGMEM logo32_vatra1[] = {
@@ -116,31 +120,31 @@ static const unsigned char PROGMEM logo32_vatra0[] = {
   B00000000, B00001111, B00000000, B00000000, 
   B00000000, B00001111, B00000000, B00000000, 
   B00000000, B00011111, B00000000, B00000000, 
-  B00000000, B00011111, B00000000, B00000000, 
-  B00000000, B00011111, B10000000, B00000000, 
-  B00000000, B10011111, B10000000, B00000000, 
-  B00000000, B11011111, B11000001, B00000000, 
-  B00000000, B11101111, B11000011, B00000000, 
-  B00000000, B01101111, B10000111, B00000000, 
-  B00000000, B11101111, B00001111, B00000000, 
-  B00000000, B11111110, B00011111, B00000000, 
-  B00000000, B11111100, B00111111, B10000000, 
-  B00000000, B11111000, B01111111, B10000000, 
-  B00000001, B11110000, B11111111, B11000000, 
-  B00000001, B11100001, B11111111, B11000000, 
-  B00000011, B11000011, B10111111, B11000000, 
-  B00000011, B10000111, B10111111, B11000000, 
-  B00000011, B00001111, B01111111, B11000000, 
-  B00000010, B00011010, B01111111, B11000000, 
-  B00000000, B00111000, B01111111, B11000000, 
-  B00000000, B11110000, B01101111, B11000000, 
-  B00000001, B11110000, B00101111, B11000000, 
-  B00000001, B11110000, B00001111, B10000000, 
-  B00000001, B11110000, B00000111, B10000000, 
+  B00000000, B00011111, B00000001, B00000000, 
+  B00000000, B00011111, B10000011, B00000000, 
+  B00000000, B10011111, B10000110, B00000000, 
+  B00000000, B11011111, B11001100, B00000000, 
+  B00000000, B11101111, B11001000, B00000000, 
+  B00000000, B01101111, B11100000, B00000000, 
+  B00000000, B11101111, B11100001, B00000000, 
+  B00000000, B11111111, B11000011, B00000000, 
+  B00000000, B11111111, B10000111, B10000000, 
+  B00000000, B11111111, B00001111, B10000000, 
+  B00000001, B11111110, B00011111, B11000000, 
+  B00000001, B11111100, B00111111, B11000000, 
+  B00000011, B11111000, B00111111, B11000000, 
+  B00000011, B11110000, B10111111, B11000000, 
+  B00000011, B11100001, B01111111, B11000000, 
+  B00000011, B11000010, B01111111, B11000000, 
+  B00000011, B10000000, B01111111, B11000000, 
+  B00000011, B00000000, B01101111, B11000000, 
+  B00000010, B00010000, B00101111, B11000000, 
+  B00000000, B00110000, B00001111, B10000000, 
+  B00000000, B01110000, B00000111, B10000000, 
   B00000000, B11110000, B00000111, B00000000, 
   B00000000, B01111000, B00001110, B00000000, 
   B00000000, B00011100, B00011000, B00000000 };
-//bool grijanjeRadi = false;
+bool serialMsgEn = false;
 struct _strk {
   char st1[40];
   char st2[8];
@@ -159,7 +163,8 @@ WiFiUDP udp;
 IPAddress syslogIPaddress(10, 27, 49, 5);       // log server
 volatile int SysStatus = 0;
 long m1s4slp;                                   // milisekundi kad pocinje sleep
-int menuLvl = 0,  menuIdx = 0, menuItm = 2;
+int menuLvl = 0,  menuIdx = 0;
+char menuItm[MENUSIZ][20] = { "izlaz", "info", "WiFi postav." };
 
 
 void log1(const char *lmsg) {
@@ -176,14 +181,14 @@ void readLog1() {
   
   File fi = SPIFFS.open("/log.0", "r");
   if(fi) {
-    if(SERIALMSGEN)
+    if(serialMsgEn)
       Serial.println("===== Log =====");
     else
       udp.begin(localPort);
 
     while(fi.available()) {
       line=fi.readStringUntil('\n');
-      if(SERIALMSGEN)
+      if(serialMsgEn)
         Serial.println(line);
       else {
         udp.beginPacket(syslogIPaddress, syslogPort);
@@ -191,7 +196,7 @@ void readLog1() {
         udp.endPacket();
       }
     }
-    if(SERIALMSGEN)
+    if(serialMsgEn)
       Serial.println(" ===== ===== ");
     fi.close();
   }
@@ -199,18 +204,18 @@ void readLog1() {
 
 float getTemperature() {
 
-  if(SERIALMSGEN)
+  if(serialMsgEn)
     Serial.println("Requesting DS18B20 temperature:");
   i = 0;
   do {
     DS18B20.requestTemperatures(); 
     parmTemp0 = DS18B20.getTempCByIndex(0);
     delay(100);
-    if(SERIALMSGEN)
+    if(serialMsgEn)
       Serial.printf("T: %d.%02d\r", (int)(parmTemp0 + parmT1CR), (int)((parmTemp0 + parmT1CR) *100) %100);
     i++;
   } while ((parmTemp0 == 85.0 || parmTemp0 == (-127.0)) && i <50);
-  if(SERIALMSGEN)
+  if(serialMsgEn)
     Serial.println("");
   return parmTemp0 + parmT1CR;
 }
@@ -221,7 +226,7 @@ bool setupWiFi() {
 
   i = WiFi.scanNetworks();
   if (i == 0) {
-    if(SERIALMSGEN)
+    if(serialMsgEn)
       Serial.println("no networks found");
   }
   else {
@@ -235,43 +240,43 @@ bool setupWiFi() {
       }
     }
     if(notchos) {
-      display.setCursor(42, 16);
+      display.setCursor(42, 40);
       display.print("nema wifi!!");
       display.display();
       log1("No WiFi!");
       return(false);
     }
-    if(SERIALMSGEN)
+    if(serialMsgEn)
       Serial.printf("\r\nConnecting to %s", WiFiSSID);
     WiFi.mode(WIFI_STA);
     WiFi.begin(WiFiSSID, WiFipswd);
-    display.setCursor(36, 16);
+    display.setCursor(36, 40);
     display.printf("%s ", WiFiSSID);
     display.display();
     j = 0;
     while (WiFi.status() != WL_CONNECTED && j++ < 20) {
       delay(500);
-      if(SERIALMSGEN)
+      if(serialMsgEn)
         Serial.print ( "." );
-      display.setCursor(42+ 6*strlen(WiFiSSID), 16);
+      display.setCursor(42+ 6*strlen(WiFiSSID), 40);
       display.setTextColor(BLACK);
       display.write(prgrs[(j+3)%4]);
       display.display();
-      display.setCursor(42+ 6*strlen(WiFiSSID), 16);
+      display.setCursor(42+ 6*strlen(WiFiSSID), 40);
 //      display.printf("WiFi: %s %c\r", WiFiSSID, prgrs[j%4]);
       display.setTextColor(WHITE);
       display.write(prgrs[j%4]);
       display.display();
     }
     if(j == 21){
-      if(SERIALMSGEN)
+      if(serialMsgEn)
         Serial.printf("\r\nCould not connect to %s", WiFiSSID);
       if(i>=1) {
         log1("No WiFi!");
         return(false);
       }
     } else {
-      if(SERIALMSGEN)
+      if(serialMsgEn)
         Serial.println("  OK");
       //Serial.print("  IP: ");
       //Serial.println(WiFi.localIP());
@@ -297,11 +302,11 @@ void parmStr2Var(int vi) {
       case 5:         // HSRZ
         parmHSRZ = (float)atof(Parms[vi].st1);
         break;
-      case 6:         // TCIV
-        parmTCIV = atoi(Parms[vi].st1);
-        break;
-      case 7:         // WUIM
+      case 6:         // WUIM
         parmWUIM = atoi(Parms[vi].st1);
+        break;
+      case 7:         // SERM
+        parmSERM = atoi(Parms[vi].st1);
         break;
     }
   }
@@ -381,7 +386,7 @@ int readConfig() {
     //Serial.printf("s2: %s [%x - %c];\r\n", s2.c_str(), ver_parmc, c);
     ver = ((ver_parmc >> 5) & 0x07);
     parmc = (ver_parmc & 0x1f);
-    //if(SERIALMSGEN)
+    //if(serialMsgEn)
     //  Serial.printf("v:%d; PRMC:%d\r\n", ver, parmc);
     if(ver != 1 || parmc <=0)
       return 0;
@@ -392,7 +397,7 @@ int readConfig() {
       val[i] = (char *)malloc(15);
       //f1.scanf(f1, "%4s=%s\n", param[i], val[i]);
       line = f1.readStringUntil('\n');
-      if(SERIALMSGEN)
+      if(serialMsgEn)
         Serial.printf("li[%d]: %s;\r\n", i, line.c_str());
       //sscanf(line, "%4s=%s\n", param[i], val[i]);
       if(strlen(line.c_str()) >0) {       // izbjeg. prazne linije
@@ -433,8 +438,8 @@ int readConfig() {
     f1.printf("T1CR=0\n");
     f1.printf("TMZC=CET\n");
     f1.printf("HSRZ=0.5\n");
-    f1.printf("TCIV=120\n");
     f1.printf("WUIM=4\n");
+    f1.printf("SERM=1\n");
     f1.close();
   }
   return(0);
@@ -462,7 +467,7 @@ int saveConfig() {
       j++;
     }
   }
-  ver_parmc = 0x20 + 2 + j;
+  ver_parmc = 0x20 + 2 + j;       // b001 xxxxx
   f1 = SPIFFS.open(cfg_dat, "w");
   f1.printf("KVPM=%x\n", ver_parmc);
   f1.printf("SSID=%s\nWPSW=%s", WiFiSSID, WiFipswd);
@@ -476,13 +481,13 @@ int drvaIugljen() {
 
   i=0;
   while(!client.connect(webSrv, httpPort) && i<5) {
-    if(SERIALMSGEN)
+    if(serialMsgEn)
       Serial.printf("> %d ", i);
     delay(200);
     i++;
   }
   if(i==5) {
-    if(SERIALMSGEN)
+    if(serialMsgEn)
       Serial.printf("connection to server failed.\r\n");
     display.printf("\nserver nedostup.\n");
     display.display();
@@ -508,7 +513,7 @@ int drvaIugljen() {
     for(i=2; i<NOCFGSTR; i++) {
       if(Parms[i].stfin != 0) {
         j++;
-        if(SERIALMSGEN)
+        if(serialMsgEn)
           Serial.printf(" %%%d (%s): %s *\r\n", i, st2[i], Parms[i].st1);
         parmStr2Var(i);
         Parms[i].stfin=0;
@@ -526,11 +531,11 @@ int drvaIugljen() {
 bool ajdeGrijanje() {
   if(parmTemp0 > 0 && parmTemp0 < 50) {
     if((parmTemp0 + parmT1CR > parmTemp1 + parmHSRZ /2) && (SysStatus & STAT_HEATING)) {
-      if(SERIALMSGEN)
+      if(serialMsgEn)
         Serial.println("Gasi grijanje");
       SysStatus = SysStatus & ~STAT_HEATING;
     } else if((parmTemp0 + parmT1CR < parmTemp1 - parmHSRZ /2) && !(SysStatus & STAT_HEATING)) {
-      if(SERIALMSGEN)
+      if(serialMsgEn)
         Serial.println("Pali grijanje");
       SysStatus = SysStatus | STAT_HEATING;
     }
@@ -548,17 +553,42 @@ void crtajStatus() {
 }
 
 void crtajMenu() {
-  display.fillRect(22, 8, 84, 8, BLACK);
-  display.setCursor(22, 8);
-  display.printf("mlv: %d; mid: %d", menuLvl, menuIdx);
+  for(i=0; i<MENUSIZ; i++) {
+    display.fillRect(12, 8 + 8 * i, 112, 8, BLACK);
+    display.setCursor(12, 8 + 8 * i);
+    if(i == menuIdx)  display.printf("\x10 %s \x11", menuItm[i]);
+        else          display.printf("  %s  ", menuItm[i]);
+  }
   display.display();
 }
 
 void menuAkc() {
-  if(menuLvl == 0 && menuIdx == 0) {         // izlaz iz menu-a
-    SysStatus = SysStatus & ~STAT_MENU;
-    display.fillRect(22, 8, 84, 8, BLACK);
-    display.display();
+  int m1s;
+
+  if(menuLvl == 0) {
+    switch(menuIdx) {
+      case MENU_EXIT:         // izlaz iz menu-a
+        SysStatus = SysStatus & ~STAT_MENU;
+        display.fillRect(12, 8, 90, 8 * MENUSIZ, BLACK);
+        display.display();
+        break;
+      case MENU_SETUP:
+        strcpy(Parms[7].st1, "1");
+        saveConfig();
+        display.fillRect(12, 8, 90, 8 * MENUSIZ, BLACK);
+        display.setCursor(12, 8);
+        display.printf("Odspoji tipke i\nrebootaj. Dalje ide\nserijskom vezom.");
+        display.display();
+        m1s = millis() + 2500;
+        while(millis() < m1s)  ;
+        break;
+      default:
+        display.setCursor(12, 8);
+        display.printf(" ** ** ", menuIdx);
+        display.display();
+        m1s = millis() + 500;
+        while(millis() < m1s)  ;
+    }
   }
 }
 
@@ -574,7 +604,7 @@ void pin_ISR1() {
   crtajStatus();
   if(SysStatus & STAT_BTN2_ON)  return;
   if(SysStatus & STAT_MENU) {
-    menuIdx = ++menuIdx % menuItm;
+    menuIdx = ++menuIdx % MENUSIZ;
     crtajMenu();
     m1s = millis() + 500;
     while(millis() < m1s)  ;
@@ -608,9 +638,6 @@ void pin_ISR2() {
   crtajStatus();
   if(SysStatus & STAT_BTN1_ON)  return;
   if(SysStatus & STAT_MENU) {
-    display.fillRect(46, 16, 36, 8, BLACK);
-    display.setCursor(46, 16);
-    display.printf("akc! %d", menuIdx);
     crtajMenu();
     m1s = millis() + 500;
     while(millis() < m1s)  ;
@@ -643,23 +670,70 @@ void OTAupd() {
     t_httpUpdate_return ret = ESPhttpUpdate.update("http://server/file.bin");
     switch(ret) {
       case HTTP_UPDATE_FAILED:
-        display.printf("HTTP_UPDATE_FAILD Error (%d): %s", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
+        display.printf("HTTP_UPDATE_FAILD Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
         display.display();
         break;
       case HTTP_UPDATE_NO_UPDATES:
-        display.println("HTTP_UPDATE_NO_UPDATES");
+        display.printf("HTTP_UPDATE_NO_UPDATES\n");
         display.display();
         break;
       case HTTP_UPDATE_OK:
-        display.println("HTTP_UPDATE_OK");
+        display.printf("HTTP_UPDATE_OK\n");
         display.display();
         break;
     }
   }
 }
 
+void serialWiFiSetup() {
+  int stric;
+
+  j=0;
+  Serial.begin(115200);
+  Serial.print("\n\n-- Konfiguracija WiFi postavki --\n");
+  Serial.print("Daj ime SSID-a: ");
+  stric = 1;
+  while(stric) {
+    if(j = Serial.available() > STBUF) { j = STBUF; }
+    Serial.readBytes(st1, j);
+    for(i = 0; i < j; i++){
+      if(st1[i] == '\r' || st1[i] == '\n'){
+        st1[i] = '\0';
+        display.println(st1);
+        display.display();
+        stric = 0;
+      } else {
+        Serial.print(st1[j]);
+        j++;
+      }
+    }
+  }
+  j=0;
+  Serial.print("Daj lozinku: ");
+  stric = 1;
+  while(stric) {
+    if(j = Serial.available() > STBUF) { j = STBUF; }
+    Serial.readBytes(st1, j);
+    for(i = 0; i < j; i++){
+      if(st1[i] == '\r' || st1[i] == '\n'){
+        st1[i] = '\0';
+        display.println(st1);
+        display.display();
+        stric = 0;
+      } else {
+        j++;
+      }
+    }
+  }
+
+  strcpy(Parms[7].st1, "0");
+  saveConfig();
+  while(true)  delay(2000);
+}
+
 void setup() {
   int dlyc2 = 0;
+  char parmNam[5];
 
   delay(100);
   display.begin(SSD1306_SWITCHCAPVCC);  // Switch OLED
@@ -676,9 +750,9 @@ void setup() {
       display.println();
   }
   display.display();
-  if(SERIALMSGEN) {
+  if(serialMsgEn) {
     Serial.begin(115200);
-    Serial.printf(greetmsg, vers[0], vers[1], vers[2]);
+    Serial.printf(greetmsg, (VERS & 0xFF000000) >> 24, (VERS & 0x00FF0000) >> 16, (VERS & 0x0000FF00) >> 8);
   } else {
     delay(1000);
     pinMode(RLY_1, OUTPUT);
@@ -695,12 +769,12 @@ void setup() {
   display.setTextSize(1);
   display.setTextColor(WHITE);
   display.setCursor(0, 0);
-  display.printf("ver %d.%d.%d\n", vers[0], vers[1], vers[2]);
+  display.printf("ver %d.%d.%d\n", (VERS & 0xFF000000) >> 24, (VERS & 0x00FF0000) >> 16, (VERS & 0x0000FF00) >> 8);
   display.display();
   // setup OneWire bus
   DS18B20.begin();
   chipID = ESP.getChipId();
-  if(SERIALMSGEN)
+  if(serialMsgEn)
     Serial.printf("ESP8266 Chip id = %08x\r\n", chipID);
   display.printf("chipID %08x\n", chipID);
   display.display();
@@ -720,16 +794,16 @@ void setup() {
 //  }
  
   if(!SPIFFS.begin()) {
-    if(SERIALMSGEN)
+    if(serialMsgEn)
       Serial.println("SPIFFS!");
     SPIFFS.format();
     delay(2500);
   }
   Dir dir = SPIFFS.openDir("/");
-  if(SERIALMSGEN)
+  if(serialMsgEn)
     Serial.println("dir:");
   while (dir.next()) {
-    if(SERIALMSGEN) {
+    if(serialMsgEn) {
       Serial.print(dir.fileName());
       Serial.print("\t");
       Serial.println(dir.fileSize());
@@ -755,10 +829,27 @@ void setup() {
   readConfig();
   for(i=2; i<NOCFGSTR; i++) {
     Parms[i].stfin =1;
-    //Serial.printf(" *parm[%s]: %s;\r\n", Parms[i].st2, Parms[i].st1);
+    if(serialMsgEn)
+      Serial.printf(" *parm[%s]: %s;\r\n", Parms[i].st2, Parms[i].st1);
+    else {
+      if(strlen(Parms[i].st1) > 0) {
+        strncpy(parmNam, Parms[i].st2, 4);
+        parmNam[4] = '\0';              // strncpy ne stavlja '\0' na kraj
+        display.printf("%s:%s  ", parmNam, Parms[i].st1);
+        if(i%2 > 0)  display.printf("\n");
+      }
+      display.display();
+    }
     parmStr2Var(i);
     Parms[i].stfin =0;
   }
+  if(parmSERM) {
+    display.printf("** Serial setup **");
+    display.display();
+    serialWiFiSetup();
+    delay(2500);
+  }
+
   dlyc1 = 0;
   display.printf("WiFi: ");
   display.display();
@@ -780,13 +871,13 @@ void setup() {
   delay(500);
   j=0;
   while(!client.connect(webSrv, httpPort) && j<5) {
-    if(SERIALMSGEN)
+    if(serialMsgEn)
       Serial.printf("> %d ", j);
     delay(200);
     j++;
   }
   if(j==5) {
-    if(SERIALMSGEN)
+    if(serialMsgEn)
       Serial.printf("connection to server failed [p]\r\n");
     display.printf("server nedostup.\n");
     display.display();
@@ -800,7 +891,7 @@ void setup() {
     getParms();
     for(i=0; i<NOCFGSTR; i++) {
       if(Parms[i].stfin == 1) {
-        if(SERIALMSGEN)
+        if(serialMsgEn)
           Serial.printf(" *%d (%s): %s *\r\n", i, Parms[i].st2, Parms[i].st1);
         delay(100);
       }
@@ -828,8 +919,6 @@ void loop() {
   char grije[5];
 
   if(SysStatus & STAT_MENU) {
-    display.setCursor(35, 0);
-    display.printf(" -- menu -- ");
     display.display();
     crtajMenu();
     delay(1000);
@@ -843,12 +932,15 @@ void loop() {
   temperature = getTemperature();
   // convert temperature to a string with two digits before the comma and 2 digits for precision
   dtostrf(temperature, 2, 2, temperatureString);
-  if(SERIALMSGEN)
+  if(serialMsgEn)
     Serial.printf("Acquired temperature: %s C\r\n", temperatureString);
   Vcc = ESP.getVcc();
-  if(SERIALMSGEN)
+  if(serialMsgEn)
     Serial.printf("ESP VCC: %d.%03dV\r\n", Vcc/1000, Vcc%1000);
 
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
   if(dlyc1 % parmWUIM == 0) {
     display.setCursor(0,0);
     display.printf(" wifi + srvr", chipID);
@@ -863,7 +955,7 @@ void loop() {
     display.printf(" WkU: %d", dlyc1);
     display.display();
     if(WiFi.status() != WL_CONNECTED) {
-      if(SERIALMSGEN)
+      if(serialMsgEn)
         Serial.println("WiFi reconnect!");
       WiFi.disconnect();
       delay(2500);
@@ -876,11 +968,11 @@ void loop() {
   if(ajdeGrijanje()) {
     if(SysStatus & STAT_HEATING) {
       strcpy(grije, "upal");
-      if(!SERIALMSGEN)  digitalWrite(RLY_2, 1);
+      if(!serialMsgEn)  digitalWrite(RLY_2, 1);
     }
     else {
       strcpy(grije, "ugas");
-      if(!SERIALMSGEN)  digitalWrite(RLY_2, 0);
+      if(!serialMsgEn)  digitalWrite(RLY_2, 0);
     }
   } else  strcpy(grije, "*T!*");
   display.clearDisplay();
@@ -920,17 +1012,17 @@ void loop() {
       if((SysStatus & STAT_BTN1_ON) && (SysStatus & STAT_BTN2_ON)) {
         if(SysStatus & STAT_BTN_PLUS)  parmTemp1 -= 0.5;  //
         else  parmTemp1 += 0.5;                           // vrati promjenu T1
-        m1s = millis() + 500;
         SysStatus |= STAT_MENU;
         display.setCursor(35, 52);
         display.printf(" -- menu -- ");
         display.display();
+        m1s = millis() + 500;
         while(millis() < m1s)  ;
 //        display.fillRect(35, 52, 72, 8, BLACK);
         display.clearDisplay();
         display.setTextSize(1);
         display.setTextColor(WHITE);
-//        display.display();
+        crtajMenu();
       }
       delay(500);
     }
@@ -972,7 +1064,7 @@ void loop() {
     display.display();
     ESP.deepSleep(900000000, WAKE_RF_DEFAULT);
   }
-  if(SERIALMSGEN)
+  if(serialMsgEn)
     Serial.println("");
 }
 
