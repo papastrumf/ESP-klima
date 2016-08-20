@@ -1,5 +1,5 @@
 /*
- * ver 0.5.4
+ * ver 0.5.5
  * 
  * Sources:
  * http://www.jerome-bernard.com/blog/2015/10/04/wifi-temperature-sensor-with-nodemcu-esp8266/
@@ -27,7 +27,7 @@ extern "C" {
   ADC_MODE(ADC_VCC);
 }
 
-#define VERS                    0x00050400      // 0.5.4
+#define VERS                    0x00050500
 #define D0                      16              // GPIO16
 #define D1                      5               // GPIO5
 #define D2                      4               // GPIO4
@@ -59,9 +59,10 @@ extern "C" {
 #define MENU_EXIT               0
 #define MENU_INFO               1
 #define MENU_SETUP              2
+#define ERASE_FLASH             false
 
 
-char ssid[2][8], password[2][20];
+char WiFssid[2][15], WiFpsk[2][20];
 const char* greetmsg = "\rKlima za po doma,  ver. %d.%d.%d (c) kek0 2016.\r\n";
 int i, j, chipID, Vcc;
 unsigned int localPort = 1245, httpPort = 80, syslogPort = 514, dlyc1;
@@ -232,9 +233,9 @@ bool setupWiFi() {
   else {
     for(j=0; j<2; j++) {
       for(k=0; k<i; k++) {
-        if(!strcmp(ssid[j], WiFi.SSID(k).c_str()) && notchos) {
-          strcpy(WiFiSSID, ssid[j]);
-          strcpy(WiFipswd, password[j]);
+        if(!strcmp(WiFssid[j], WiFi.SSID(k).c_str()) && notchos) {
+          strcpy(WiFiSSID, WiFssid[j]);
+          strcpy(WiFipswd, WiFpsk[j]);
           notchos = 0;
         }
       }
@@ -250,7 +251,7 @@ bool setupWiFi() {
       Serial.printf("\r\nConnecting to %s", WiFiSSID);
     WiFi.mode(WIFI_STA);
     WiFi.begin(WiFiSSID, WiFipswd);
-    display.setCursor(36, 40);
+    display.setCursor(36, 48);
     display.printf("%s ", WiFiSSID);
     display.display();
     j = 0;
@@ -258,11 +259,11 @@ bool setupWiFi() {
       delay(500);
       if(serialMsgEn)
         Serial.print ( "." );
-      display.setCursor(42+ 6*strlen(WiFiSSID), 40);
+      display.setCursor(42+ 6*strlen(WiFiSSID), 48);
       display.setTextColor(BLACK);
       display.write(prgrs[(j+3)%4]);
       display.display();
-      display.setCursor(42+ 6*strlen(WiFiSSID), 40);
+      display.setCursor(42+ 6*strlen(WiFiSSID), 48);
 //      display.printf("WiFi: %s %c\r", WiFiSSID, prgrs[j%4]);
       display.setTextColor(WHITE);
       display.write(prgrs[j%4]);
@@ -373,9 +374,10 @@ int readConfig() {
   if(f1) {
     //f1.fscanf(f1, "KVPM=%2x\n", &ver_parmc);
     line = f1.readStringUntil('\n');
-    //Serial.printf("li: %s;\r\n", line.c_str());
+    //if(serialMsgEn)
+    //  Serial.printf("li: %s;\r\n", line.c_str());
     //sscanf(line, "KVPM=%2x", &ver_parmc);
-    s1 = String("KVPM");
+    s1 = String("KVPM");    // ver, parm
     s2 = line.substring(s1.length() + 1);
     ver_parmc = s2.substring(0, 1).toInt() << 4;
     c = s2.substring(1, 2).c_str()[0];
@@ -386,15 +388,15 @@ int readConfig() {
     //Serial.printf("s2: %s [%x - %c];\r\n", s2.c_str(), ver_parmc, c);
     ver = ((ver_parmc >> 5) & 0x07);
     parmc = (ver_parmc & 0x1f);
-    //if(serialMsgEn)
-    //  Serial.printf("v:%d; PRMC:%d\r\n", ver, parmc);
+    if(serialMsgEn)
+      Serial.printf("v:%d; PRMC:%d\r\n", ver, parmc);
     if(ver != 1 || parmc <=0)
       return 0;
     param = (char **)malloc(sizeof(char *) * parmc);
     val = (char **)malloc(sizeof(char *) * parmc);
     while(f1.available() && i < parmc) {
       param[i] = (char *)malloc(8);
-      val[i] = (char *)malloc(15);
+      val[i] = (char *)malloc(25);
       //f1.scanf(f1, "%4s=%s\n", param[i], val[i]);
       line = f1.readStringUntil('\n');
       if(serialMsgEn)
@@ -410,9 +412,9 @@ int readConfig() {
     paramURI[0] = '\0';
     for(i=0; i<parmc; i++) {
       if(!strcmp(param[i], "SSID"))
-        strcpy(ssid[1], val[i]);
-      else if(!strcmp(param[i], "WPSW"))
-        strcpy(password[1], val[i]);
+        strcpy(WiFssid[1], val[i]);
+      else if(!strcmp(param[i], "WPSK"))
+        strcpy(WiFpsk[1], val[i]);
       else if(!strcmp(param[i], "Temp1"))
         strcpy(Parms[2].st1, val[i]);
       else {
@@ -467,10 +469,13 @@ int saveConfig() {
       j++;
     }
   }
-  ver_parmc = 0x20 + 2 + j;       // b001 xxxxx
+  if(strlen(WiFssid[1]) > 0 && strlen(WiFpsk[1]) > 0)
+    j += 2;
+  ver_parmc = 0x20 + j;       // b001 xxxxx
   f1 = SPIFFS.open(cfg_dat, "w");
   f1.printf("KVPM=%x\n", ver_parmc);
-  f1.printf("SSID=%s\nWPSW=%s", WiFiSSID, WiFipswd);
+  if(strlen(WiFssid[1]) > 0 && strlen(WiFpsk[1]) > 0)
+    f1.printf("SSID=%s\nWPSK=%s", WiFssid[1], WiFpsk[1]);
   f1.print(st1);
   f1.close();
 }
@@ -540,9 +545,7 @@ bool ajdeGrijanje() {
       SysStatus = SysStatus | STAT_HEATING;
     }
     return true;
-  } else {
-    return false;
-  }
+  } else  return false;
 }
 
 void crtajStatus() {
@@ -686,54 +689,68 @@ void OTAupd() {
 }
 
 void serialWiFiSetup() {
-  int stric;
+  int len, wifparm;
+  bool stric;
+  char serch[25];
 
-  j=0;
   Serial.begin(115200);
-  Serial.print("\n\n-- Konfiguracija WiFi postavki --\n");
-  Serial.print("Daj ime SSID-a: ");
-  stric = 1;
-  while(stric) {
-    if(j = Serial.available() > STBUF) { j = STBUF; }
-    Serial.readBytes(st1, j);
-    for(i = 0; i < j; i++){
-      if(st1[i] == '\r' || st1[i] == '\n'){
-        st1[i] = '\0';
-        display.println(st1);
-        display.display();
-        stric = 0;
-      } else {
-        Serial.print(st1[j]);
-        j++;
+  Serial.print("\n\n\r-- Konfiguracija WiFi postavki --");
+  for(wifparm=0; wifparm<2; wifparm++) {
+    j=0;
+    switch(wifparm) {
+      case 0:
+        Serial.print("\n\rDaj ime SSID-a: ");
+        break;
+      case 1:
+        Serial.print("\n\rDaj lozinku: ");
+        break;
+    }
+    stric = true;
+    while(stric) {
+      if(len = Serial.available() >0) {
+        if(len > 24)  len = 24;
+        Serial.readBytes(serch, len);
+        for(i = 0; i < len; i++){
+          if(serch[i] == '\r' || serch[i] == '\n'){
+            st1[j] = '\0';
+            //Serial.printf("\n\rwifparm[%d]: %s.", wifparm, st1);
+            display.println(st1);
+            display.display();
+            stric = false;
+          } else {
+            if(wifparm == 0)  Serial.print(serch[i]);
+                else    Serial.print("*");
+            st1[j] = serch[i];
+            j++;
+          }
+        }
       }
     }
-  }
-  j=0;
-  Serial.print("Daj lozinku: ");
-  stric = 1;
-  while(stric) {
-    if(j = Serial.available() > STBUF) { j = STBUF; }
-    Serial.readBytes(st1, j);
-    for(i = 0; i < j; i++){
-      if(st1[i] == '\r' || st1[i] == '\n'){
-        st1[i] = '\0';
-        display.println(st1);
-        display.display();
-        stric = 0;
-      } else {
-        j++;
-      }
+    switch(wifparm) {
+      case 0:
+        strcpy(WiFssid[1], st1);
+        break;
+      case 1:
+        strcpy(WiFpsk[1], st1);
+        break;
     }
   }
-
   strcpy(Parms[7].st1, "0");
   saveConfig();
+  Serial.print("\n\n\r-- Konfiguracija gotova, spoji tipke i rebootaj. --");
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(WHITE);
+  display.setCursor(12, 8);
+  display.printf("Postavke gotove.\nSpoji tipke i\nrebootaj.\n");
+  display.display();
   while(true)  delay(2000);
 }
 
 void setup() {
   int dlyc2 = 0;
   char parmNam[5];
+  bool wif5;
 
   delay(100);
   display.begin(SSD1306_SWITCHCAPVCC);  // Switch OLED
@@ -793,7 +810,7 @@ void setup() {
 //    Serial.println("Flash Chip configuration ok.\r\n");
 //  }
  
-  if(!SPIFFS.begin()) {
+  if(!SPIFFS.begin() || ERASE_FLASH) {
     if(serialMsgEn)
       Serial.println("SPIFFS!");
     SPIFFS.format();
@@ -814,10 +831,10 @@ void setup() {
   //readLog1();
   //SPIFFS.remove("/config");
 
-  strcpy(ssid[0], "kek0");
-  strcpy(password[0], "k1ju4wIf");
-  strcpy(ssid[1], "--");
-  strcpy(password[1], "!1");
+  strcpy(WiFssid[0], "kek0");
+  strcpy(WiFpsk[0], "k1ju4wIf");
+  strcpy(WiFssid[1], "");
+  strcpy(WiFpsk[1], "");
   for(i=0; i<NOCFGSTR; i++) {
     Parms[i].stfnd=0;        // broj poklapanih znakova
     Parms[i].stfin=0;        // nadjeno poklapanje
@@ -827,6 +844,7 @@ void setup() {
   }
 
   readConfig();
+  display.printf("SSID:%s\n", WiFssid);
   for(i=2; i<NOCFGSTR; i++) {
     Parms[i].stfin =1;
     if(serialMsgEn)
@@ -846,6 +864,7 @@ void setup() {
   if(parmSERM) {
     display.printf("** Serial setup **");
     display.display();
+    serialMsgEn = true;
     serialWiFiSetup();
     delay(2500);
   }
@@ -853,47 +872,46 @@ void setup() {
   dlyc1 = 0;
   display.printf("WiFi: ");
   display.display();
-  while(!setupWiFi()) {
-    display.printf(" --");
+  while(!(wif5 = setupWiFi()) && ++dlyc2 >= 5) {
+    display.printf(" -%c", j);
     display.display();
-    if(++dlyc2 >= 5) {
 //      pinMode(0, OUTPUT);
 //      digitalWrite(0, 1);
 //      pinMode(2, OUTPUT);
 //      digitalWrite(2, 1);
 //      ESP.restart();        // ne radi!
-      break;
-    }
   }
   display.printf(".\n");
   display.display();
 
   delay(500);
-  j=0;
-  while(!client.connect(webSrv, httpPort) && j<5) {
-    if(serialMsgEn)
-      Serial.printf("> %d ", j);
-    delay(200);
-    j++;
-  }
-  if(j==5) {
-    if(serialMsgEn)
-      Serial.printf("connection to server failed [p]\r\n");
-    display.printf("server nedostup.\n");
-    display.display();
-  } else {
-    sprintf(st1, "GET /vatra/pali?ci=%08x%s HTTP/1.1\r\n", chipID, paramURI);
-    //Serial.printf("pali strlen: %d;\r\n", strlen(st1));
-    client.print(st1);
-    sprintf(st1, "Host: %s\r\nConnection: close\r\n\r\n", webSrv);
-    client.print(st1);
-    delay(100);
-    getParms();
-    for(i=0; i<NOCFGSTR; i++) {
-      if(Parms[i].stfin == 1) {
-        if(serialMsgEn)
-          Serial.printf(" *%d (%s): %s *\r\n", i, Parms[i].st2, Parms[i].st1);
-        delay(100);
+  if(wif5) {
+    j=0;
+    while(!client.connect(webSrv, httpPort) && j<5) {
+      if(serialMsgEn)
+        Serial.printf("> %d ", j);
+      delay(200);
+      j++;
+    }
+    if(j==5) {
+      if(serialMsgEn)
+        Serial.printf("connection to server failed [p]\r\n");
+      display.printf("server nedostup.\n");
+      display.display();
+    } else {
+      sprintf(st1, "GET /vatra/pali?ci=%08x%s HTTP/1.1\r\n", chipID, paramURI);
+      //Serial.printf("pali strlen: %d;\r\n", strlen(st1));
+      client.print(st1);
+      sprintf(st1, "Host: %s\r\nConnection: close\r\n\r\n", webSrv);
+      client.print(st1);
+      delay(100);
+      getParms();
+      for(i=0; i<NOCFGSTR; i++) {
+        if(Parms[i].stfin == 1) {
+          if(serialMsgEn)
+            Serial.printf(" *%d (%s): %s *\r\n", i, Parms[i].st2, Parms[i].st1);
+          delay(100);
+        }
       }
     }
   }
