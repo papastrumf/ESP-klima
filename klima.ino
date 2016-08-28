@@ -1,5 +1,5 @@
 /*
- * ver 0.6.0
+ * ver 0.6.1
  * 
  * Sources:
  * http://www.jerome-bernard.com/blog/2015/10/04/wifi-temperature-sensor-with-nodemcu-esp8266/
@@ -27,7 +27,7 @@ extern "C" {
   ADC_MODE(ADC_VCC);
 }
 
-#define VERS                    0x00060000
+#define VERS                    0x00060104
 #define D0                      16              // GPIO16
 #define D1                      5               // GPIO5
 #define D2                      4               // GPIO4
@@ -45,7 +45,7 @@ extern "C" {
 #define RLY_1                   3               // D9
 #define RLY_2                   1               // D10
 #define STBUF                   120
-#define NOCFGSTR                8
+#define NOCFGSTR                9
 #define DEEPSLEEPVOLT           2579
 #define STAT_SLEEP              0x01
 #define STAT_HEATING            0x02            // grijanje radi
@@ -70,7 +70,7 @@ int i, j, chipID, Vcc;
 unsigned int localPort = 1245, httpPort = 80, syslogPort = 514, dlyc1;
 char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
 char st1[STBUF], paramURI[STBUF],  WiFiSSID[15], WiFipswd[25];
-char st2[NOCFGSTR][8] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "WUIM: ", "SERM: " };
+char st2[NOCFGSTR][8] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "WUIM: ", "SERM: ", "FWVR: " };
                         // T1CR - Temp1 correction            [def: 0]
                         // TMZC - timezone (client side)      [CET]
                         // HSRZ - histeresis (temp1)          [0.5]
@@ -78,7 +78,8 @@ char st2[NOCFGSTR][8] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "H
                         // WUIM - web update interval multiplier
                         //        (120 sec * WUIM = 8 min)    [4]
                         // SERM - serial mode setup           [0]
-int parmWUIM = 4, parmSERM;
+                        // FWVR - firmware version            [0x00050700 = 0.5.7]
+int parmWUIM = 4, parmSERM, parmFWVR = 0x00050700;
 float parmTemp0, parmTemp1, parmT1CR, parmHSRZ;
 char parmTMZC[5];
 static const unsigned char PROGMEM logo32_vatra1[] = {
@@ -147,7 +148,7 @@ static const unsigned char PROGMEM logo32_vatra0[] = {
   B00000000, B11110000, B00000111, B00000000, 
   B00000000, B01111000, B00001110, B00000000, 
   B00000000, B00011100, B00011000, B00000000 };
-bool serialMsgEn = false;
+bool serialMsgEn = true;
 struct _strk {
   char st1[40];
   char st2[8];
@@ -159,7 +160,6 @@ struct _strk {
 OneWire oneWire(D4);
 DallasTemperature DS18B20(&oneWire);
 char temperatureString[6];
-//ADC_MODE(ADC_VCC);
 WiFiClient client;
 ESP_SSD1306 display(OLED_DC, OLED_RST, OLED_CS);
 WiFiUDP udp;
@@ -243,7 +243,7 @@ bool setupWiFi() {
       }
     }
     if(notchos) {
-      display.setCursor(42, 48);
+      display.setCursor(42, 56);
       display.print("nema wifi!!");
       display.display();
       log1("No WiFi!");
@@ -253,20 +253,21 @@ bool setupWiFi() {
       Serial.printf("\r\nConnecting to %s", WiFiSSID);
     WiFi.mode(WIFI_STA);
     WiFi.begin(WiFiSSID, WiFipswd);
-    display.setCursor(36, 48);
-    display.printf("%s ", WiFiSSID);
+    display.setCursor(36, 56);
+    strncpy(st1, WiFiSSID, 9);
+    st1[9] = '\0';
+    display.printf("%s ", st1);
     display.display();
     j = 0;
     while (WiFi.status() != WL_CONNECTED && j++ < 20) {
       delay(500);
       if(serialMsgEn)
         Serial.print ( "." );
-      display.setCursor(42+ 6*strlen(WiFiSSID), 48);
+      display.setCursor(42+ 6*strlen(st1), 56);
       display.setTextColor(BLACK);
       display.write(prgrs[(j+3)%4]);
       display.display();
-//      display.printf("WiFi: %s %c\r", WiFiSSID, prgrs[j%4]);
-      display.setCursor(42+ 6*strlen(WiFiSSID), 48);
+      display.setCursor(42+ 6*strlen(st1), 56);
       display.setTextColor(WHITE);
       display.write(prgrs[(j)%4]);
       display.display();
@@ -310,6 +311,9 @@ void parmStr2Var(int vi) {
         break;
       case 7:         // SERM
         parmSERM = atoi(Parms[vi].st1);
+        break;
+      case 8:         // FWVR
+        parmFWVR = atoi(Parms[vi].st1);
         break;
     }
   }
@@ -463,7 +467,7 @@ int saveConfig() {
     sprintf(st1, "%s\n%s=%s", st1, parmNam, Parms[2].st1);
     j++;
   }
-  for(i=3; i<NOCFGSTR; i++) {
+  for(i=3; i<NOCFGSTR -1; i++) {      // ne upisuj zadnji param (FWVR)
     if(strlen(Parms[i].st1) > 0) {
       strncpy(parmNam, Parms[i].st2, 4);
       parmNam[4] = '\0';              // strncpy ne stavlja '\0' na kraj
@@ -472,7 +476,7 @@ int saveConfig() {
     }
   }
   if(strlen(WiFssid[1]) > 0 && strlen(WiFpsk[1]) > 0)  j += 2;
-    //sprintf(st1, "\nSSID=%s\nWPSK=%s%s", WiFssid[1], WiFpsk[1], st1);
+    //sprintf(st1, "\nSSID=%s\nWPSK=%s%s", WiFssid[1], WiFpsk[1], st1);   ovo ne radi dobro!
   ver_parmc = 0x20 + j;       // b001 xxxxx
   f1 = SPIFFS.open(cfg_dat, "w");
   f1.printf("KVPM=%x", ver_parmc);
@@ -559,9 +563,9 @@ void crtajStatus() {
 
 void crtajMenu() {
   for(i=0; i<MENUSIZ; i++) {
-    display.fillRect(12, 8 + 8 * i, 112, 8, BLACK);
+    display.fillRect(12, 8 + 8 * i, 102, 8, BLACK);
     display.setCursor(12, 8 + 8 * i);
-    if(i == menuIdx)  display.printf("\x10 %s \x11", menuItm[i]);
+    if(i == menuIdx)  display.printf("\x10 %-12s \x11", menuItm[i]);
         else          display.printf("  %s  ", menuItm[i]);
   }
   display.display();
@@ -572,7 +576,7 @@ void kazIinfo() {
 
   display.printf("SSID:%s\n", WiFssid[1]);
   display.display();
-  for(i=2; i<NOCFGSTR; i++) {
+  for(i=2; i<NOCFGSTR -1; i++) {        // osim zadnjeg parametra (FWVR)
     if(serialMsgEn)
       Serial.printf(" *parm[%s]: %s;\r\n", Parms[i].st2, Parms[i].st1);
     else {
@@ -585,6 +589,8 @@ void kazIinfo() {
       }
     }
   }
+  display.printf("FWVR:%08x\n", parmFWVR);
+  display.display();
 }
 
 void menuAkc() {
@@ -613,6 +619,8 @@ void menuAkc() {
         kazIinfo();
         m1s = millis() + 5000;
         while(millis() < m1s)  ;
+        display.fillRect(0, 8, 120, 8 * MENUSIZ, BLACK);
+        display.display();
         break;
       case MENU_ERASE_FLASH:
         SPIFFS.format();
@@ -714,15 +722,18 @@ void pin_ISR2() {
 
 void OTAupd() {
   if(WiFi.status() == WL_CONNECTED) {
-    display.clearDisplay();
-    display.setTextSize(1);
-    display.setTextColor(WHITE);
-    display.setCursor(0, 0);
-    t_httpUpdate_return ret = ESPhttpUpdate.update("http://server/file.bin");
+    sprintf(st1, "http://%s/vatra/fwupd/%08x", webSrv, chipID);
+//    sprintf(st1, "http://10.27.49.5/klima.bin");
+//    sprintf(st1, "http://www.quattro-obbligato.org/depot/");
+    if(serialMsgEn)
+      Serial.printf(" update link: %s\r\n", st1);
+    t_httpUpdate_return ret = ESPhttpUpdate.update(st1);
     switch(ret) {
       case HTTP_UPDATE_FAILED:
         display.printf("HTTP_UPDATE_FAILD Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
         display.display();
+        if(serialMsgEn)
+          Serial.printf("HTTP_UPDATE_FAILD Error (%d): %s\r\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
         break;
       case HTTP_UPDATE_NO_UPDATES:
         display.printf("HTTP_UPDATE_NO_UPDATES\n");
@@ -895,7 +906,7 @@ void setup() {
   }
 
   readConfig();
-  for(i=2; i<NOCFGSTR; i++) {
+  for(i=2; i<NOCFGSTR -1; i++) {
     Parms[i].stfin =1;
     parmStr2Var(i);
     Parms[i].stfin =0;
@@ -914,7 +925,7 @@ void setup() {
   display.printf("WiFi: ");
   display.display();
   while(!(wif5 = setupWiFi()) && ++dlyc2 >= 5) {
-    display.printf(" -%c", j);
+    display.printf(" -%c", dlyc2);
     display.display();
 //      pinMode(0, OUTPUT);
 //      digitalWrite(0, 1);
@@ -955,12 +966,27 @@ void setup() {
         }
       }
     }
+    log1(Parms[0].st1);
+    saveConfig();
+    for(i=0; i<NOCFGSTR; i++) {
+      Parms[i].stfin=0;
+    }
+    if(parmFWVR > VERS && ESP.getVcc() >= 2890) {
+      display.clearDisplay();
+      display.setTextSize(1);
+      display.setTextColor(WHITE);
+//      display.fillRect(12, 8, 96, 16, BLACK);
+      display.setCursor(12, 8);
+      display.printf("* novi FW *\nv:%08x\n", parmFWVR);
+      display.display();
+      if(serialMsgEn)
+        Serial.printf("novi firmware spreman (%08x > %08x)\r\n", parmFWVR, VERS);
+      delay(740);
+      OTAupd();
+      delay(2500);
+    }
   }
-  log1(Parms[0].st1);
-  saveConfig();
-  for(i=0; i<NOCFGSTR; i++) {
-    Parms[i].stfin=0;
-  }
+  else  log1("No WiFi! *5");
 
   pinMode(D2, INPUT);
   pinMode(D3, INPUT);
@@ -972,7 +998,6 @@ void setup() {
 }
 
 void loop() {
-//  char msgbuf[80];
   float temperature;
   int upH, upM, upS, m1s;
   char grije[5];
