@@ -1,5 +1,5 @@
 /*
- * ver 0.6.1
+ * ver 0.6.8
  * 
  * Sources:
  * http://www.jerome-bernard.com/blog/2015/10/04/wifi-temperature-sensor-with-nodemcu-esp8266/
@@ -27,7 +27,7 @@ extern "C" {
   ADC_MODE(ADC_VCC);
 }
 
-#define VERS                    0x00060104
+#define VERS                    0x00060805
 #define D0                      16              // GPIO16
 #define D1                      5               // GPIO5
 #define D2                      4               // GPIO4
@@ -69,7 +69,7 @@ const char* greetmsg = "\rKlima za po doma,  ver. %d.%d.%d (c) kek0 2016.\r\n";
 int i, j, chipID, Vcc;
 unsigned int localPort = 1245, httpPort = 80, syslogPort = 514, dlyc1;
 char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
-char st1[STBUF], paramURI[STBUF],  WiFiSSID[15], WiFipswd[25];
+char st1[STBUF +25], paramURI[STBUF],  WiFiSSID[15], WiFipswd[25];
 char st2[NOCFGSTR][8] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "WUIM: ", "SERM: ", "FWVR: " };
                         // T1CR - Temp1 correction            [def: 0]
                         // TMZC - timezone (client side)      [CET]
@@ -148,7 +148,7 @@ static const unsigned char PROGMEM logo32_vatra0[] = {
   B00000000, B11110000, B00000111, B00000000, 
   B00000000, B01111000, B00001110, B00000000, 
   B00000000, B00011100, B00011000, B00000000 };
-bool serialMsgEn = true;
+bool serialMsgEn = false;
 struct _strk {
   char st1[40];
   char st2[8];
@@ -514,8 +514,8 @@ int drvaIugljen() {
     } else {
       strcpy(PlGs, "gs");
     }
-    sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d,Stu:%s%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
-                        chipID, temperatureString, Vcc/1000, Vcc%1000, PlGs, URI1, webSrv);
+    sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d,Stu:%s,v.%06x%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+                        chipID, temperatureString, Vcc/1000, Vcc%1000, PlGs, VERS, URI1, webSrv);
     //Serial.printf("ajde strlen: %d;\r\n", strlen(st1));
     client.print(st1);
     delay(100);
@@ -574,7 +574,14 @@ void crtajMenu() {
 void kazIinfo() {
   char parmNam[5];
 
-  display.printf("SSID:%s\n", WiFssid[1]);
+  display.printf("ver. %d.%d.%d\n", (VERS & 0xFF000000) >> 24, (VERS & 0x00FF0000) >> 16, (VERS & 0x0000FF00) >> 8);
+  if(strlen(WiFiSSID) > 14) {
+    strncpy(st1, WiFiSSID, 14);
+    st1[14] = '\0';
+  } else {
+    strcpy(st1, WiFiSSID);
+  }
+  display.printf("SSID:%s\n", st1);
   display.display();
   for(i=2; i<NOCFGSTR -1; i++) {        // osim zadnjeg parametra (FWVR)
     if(serialMsgEn)
@@ -589,8 +596,8 @@ void kazIinfo() {
       }
     }
   }
-  display.printf("FWVR:%08x\n", parmFWVR);
-  display.display();
+  //display.printf("FWVR:%08x\n", parmFWVR);
+  //display.display();
 }
 
 void menuAkc() {
@@ -621,6 +628,7 @@ void menuAkc() {
         while(millis() < m1s)  ;
         display.fillRect(0, 8, 120, 8 * MENUSIZ, BLACK);
         display.display();
+        crtajMenu();
         break;
       case MENU_ERASE_FLASH:
         SPIFFS.format();
@@ -730,16 +738,19 @@ void OTAupd() {
     t_httpUpdate_return ret = ESPhttpUpdate.update(st1);
     switch(ret) {
       case HTTP_UPDATE_FAILED:
+        display.fillRect(0, 32, 42, 8, BLACK);
         display.printf("HTTP_UPDATE_FAILD Error (%d): %s\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
         display.display();
         if(serialMsgEn)
           Serial.printf("HTTP_UPDATE_FAILD Error (%d): %s\r\n", ESPhttpUpdate.getLastError(), ESPhttpUpdate.getLastErrorString().c_str());
         break;
       case HTTP_UPDATE_NO_UPDATES:
+        display.fillRect(0, 32, 42, 8, BLACK);
         display.printf("HTTP_UPDATE_NO_UPDATES\n");
         display.display();
         break;
       case HTTP_UPDATE_OK:
+        display.fillRect(0, 32, 42, 8, BLACK);
         display.printf("HTTP_UPDATE_OK\n");
         display.display();
         break;
@@ -847,14 +858,12 @@ void setup() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  display.setCursor(0, 0);
-  display.printf("ver %d.%d.%d\n", (VERS & 0xFF000000) >> 24, (VERS & 0x00FF0000) >> 16, (VERS & 0x0000FF00) >> 8);
-  display.display();
+  display.setCursor(12, 0);
   DS18B20.begin();
   chipID = ESP.getChipId();
   if(serialMsgEn)
     Serial.printf("ESP8266 Chip id = %08x\r\n", chipID);
-  display.printf("chipID %08x\n", chipID);
+  display.printf("\x10 Klima \x11\nchipID %08x\n", chipID);
   display.display();
 
 //  uint32_t realSize = ESP.getFlashChipRealSize();
@@ -911,6 +920,7 @@ void setup() {
     parmStr2Var(i);
     Parms[i].stfin =0;
   }
+  strcpy(WiFiSSID, WiFssid[1]);
   kazIinfo();
   if(parmSERM) {
     display.printf("** Serial setup **");
@@ -971,6 +981,7 @@ void setup() {
     for(i=0; i<NOCFGSTR; i++) {
       Parms[i].stfin=0;
     }
+/*
     if(parmFWVR > VERS && ESP.getVcc() >= 2890) {
       display.clearDisplay();
       display.setTextSize(1);
@@ -981,10 +992,11 @@ void setup() {
       display.display();
       if(serialMsgEn)
         Serial.printf("novi firmware spreman (%08x > %08x)\r\n", parmFWVR, VERS);
-      delay(740);
+      //delay(740);
       OTAupd();
       delay(2500);
     }
+*/
   }
   else  log1("No WiFi! *5");
 
@@ -1025,7 +1037,7 @@ void loop() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  if(dlyc1 % parmWUIM == 0) {
+  if((int)dlyc1 % parmWUIM == 0) {
     display.setCursor(0,0);
     display.printf(" wifi + srvr", chipID);
     display.drawBitmap(0, 16,  logo32_vatra1, 32, 32, 1);
@@ -1084,6 +1096,20 @@ void loop() {
   display.setCursor(0, 52);
   display.printf("{%s}", grije);
   display.display();
+
+  if(parmFWVR > VERS && ESP.getVcc() >= 2890) {
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
+    display.setCursor(12, 8);
+    display.printf("* novi FW *\n  v:%08x\n\n  Cekaj!", parmFWVR);
+    display.setCursor(0, 32);
+    display.display();
+    if(serialMsgEn)
+      Serial.printf("novi firmware spreman (%08x > %08x)\r\n", parmFWVR, VERS);
+    OTAupd();
+    delay(2500);
+  }
 
   if(Vcc > DEEPSLEEPVOLT) {
     while(millis() < m1s4slp) {
