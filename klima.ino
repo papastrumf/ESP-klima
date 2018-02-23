@@ -1,16 +1,16 @@
 /*
-   ver 0.6.8
+   ver 0.7.0
 
    Sources:
    http://www.jerome-bernard.com/blog/2015/10/04/wifi-temperature-sensor-with-nodemcu-esp8266/
    https://github.com/esp8266/Arduino/issues/1381
    http://www.esp8266.com/wiki/doku.php?id=esp8266_gpio_pin_allocations
    http://cholla.mmto.org/esp8266/pins/
-   fon
+   https://github.com/mozgy/esp8266/blob/master/WiFi_OLED/Mozz_WiFi_OLED
 */
 
 #include <ESP8266WiFi.h>
-#include <OneWire.h>
+//#include <OneWire.h>
 #include <DallasTemperature.h>
 #include <FS.h>
 #include <ESP_SSD1306.h>
@@ -20,6 +20,7 @@
 #include <WiFiUdp.h>
 #include <ESP8266HTTPClient.h>
 #include <ESP8266httpUpdate.h>
+#include <Fonts/FreeSans12pt7b.h>
 extern "C" {
 #include "gpio.h"
 #include "user_interface.h"
@@ -27,7 +28,7 @@ extern "C" {
   //ADC_MODE(ADC_VCC);
 }
 
-#define VERS                    0x0006080a
+#define VERS                    0x00070015
 #define D0                      16              // GPIO16
 #define D1                      5               // GPIO5
 #define D2                      4               // GPIO4
@@ -42,8 +43,8 @@ extern "C" {
 #define OLED_DC                 5               // D1
 #define OLED_CS                 15              // HCS
 #define OLED_RST                16              // D0
-#define RLY_1                   3               // D9
-#define RLY_2                   1               // D10
+#define RLY_T                   3               // D9
+#define RLY_E                   1               // D10
 #define STBUF                   120
 #define NOCFGSTR                9
 #define DEEPSLEEPVOLT           2579
@@ -62,15 +63,16 @@ extern "C" {
 #define MENU_ERASE_FLASH        3
 #define MENU_LOG_FILE           4
 #define ERASE_FLASH             false
+#define DEEPSLP_THR             3
 
 
 ADC_MODE(ADC_VCC);
 char WiFssid[2][15], WiFpsk[2][20];
-const char* greetmsg = "\r\nKlima za po doma,  ver. %d.%d.%d (c) kek0 2016.\r\n";
+const char* greetmsg = "\r\nKlima za po doma,  ver. %s (c) kek0 2018.\r\n";
 int i, j, chipID, Vcc;
-unsigned int localPort = 1245, httpPort = 80, syslogPort = 514, dlyc1;
+unsigned int localPort = 1245, httpPort = 80, syslogPort = 514, dlyc1, DScnt = 0;
 char webSrv[] = "oblak.kek0.net", cfg_dat[] = "/config";
-char st1[STBUF + 25], paramURI[STBUF],  WiFiSSID[15], WiFipswd[25];
+char st1[STBUF + 29], paramURI[STBUF],  WiFiSSID[15], WiFipswd[25];
 char st2[NOCFGSTR][8] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "HSRZ: ", "WUIM: ", "SERM: ", "FWVR: " };
 // T1CR - Temp1 correction            [def: 0]
 // TMZC - timezone (client side)      [CET]
@@ -79,8 +81,8 @@ char st2[NOCFGSTR][8] = { "Date: ", "UpdTi: ", "Temp1: ", "T1CR: ", "TMZC: ", "H
 // WUIM - web update interval multiplier
 //        (120 sec * WUIM = 8 min)    [4]
 // SERM - serial mode setup           [0]
-// FWVR - firmware version            [0x00050700 = 0.5.7]
-int parmWUIM = 4, parmSERM, parmFWVR = 0x00050700;
+// FWVR - firmware version            [0x0005070b = 0.5.7(b)]
+int parmWUIM = 4, parmSERM, parmFWVR = 0x0005070b;
 float parmTemp0, parmTemp1, parmT1CR, parmHSRZ;
 char parmTMZC[5];
 static const unsigned char PROGMEM logo32_vatra1[] = {
@@ -162,7 +164,7 @@ struct _strk {
 
 OneWire oneWire(D4);
 DallasTemperature DS18B20(&oneWire);
-char temperatureString[6];
+char temperatureString[6], swVer[15];
 WiFiClient client;
 ESP_SSD1306 display(OLED_DC, OLED_RST, OLED_CS);
 WiFiUDP udp;
@@ -219,6 +221,7 @@ bool setupWiFi() {
         }
       }
     }
+    display.fillRect(35, 56, 92, 8, BLACK);
     if (notchos) {
       display.setCursor(42, 56);
       display.print("nema wifi!!");
@@ -509,7 +512,7 @@ int saveConfig() {
 
 int drvaIugljen() {
   String line;
-  char URI1[12] = "", PlGs[4] = "";
+  char URI1[12] = "", PlGs[5] = "";
 
   i = 0;
   while (!client.connect(webSrv, httpPort) && i < 5) {
@@ -528,15 +531,16 @@ int drvaIugljen() {
     if (parmTemp1 == 0) {
       strcpy(URI1, "&pm=1");
     } else if (SysStatus & STAT_TEMP1_ADJ) {
-      sprintf(URI1, "&t1=%d.%02d", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
+      sprintf(Parms[2].st1, "%d.%02d", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
+      sprintf(URI1, "&t1=%s", Parms[2].st1);
     }
     if (SysStatus & STAT_HEATING) {
-      strcpy(PlGs, "pl");
+      strcpy(PlGs, "PaLi");
     } else {
-      strcpy(PlGs, "gs");
+      strcpy(PlGs, "GaSi");
     }
-    sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d,Stu:%s,v.%06x%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
-            chipID, temperatureString, Vcc / 1000, Vcc % 1000, PlGs, VERS, URI1, webSrv);
+    sprintf(st1, "GET /vatra/ajde/?ci=%08x&t0=%s&xi=Vcc:%d.%03d,%s,v.%s,wkUp:%d%s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+            chipID, temperatureString, Vcc / 1000, Vcc % 1000, PlGs, swVer, dlyc1 / parmWUIM, URI1, webSrv);
     //Serial.printf("ajde strlen: %d;\r\n", strlen(st1));
     client.print(st1);
     delay(100);
@@ -563,21 +567,31 @@ int drvaIugljen() {
 bool ajdeGrijanje() {
   if (parmTemp0 > 0 && parmTemp0 < 50) {
     if ((parmTemp0 + parmT1CR > parmTemp1 + parmHSRZ / 2) && (SysStatus & STAT_HEATING)) {
-      if (serialMsgEn)
+      if (!serialMsgEn)
+        digitalWrite(RLY_T, 0);
+      else
         Serial.println("Gasi grijanje");
       SysStatus = SysStatus & ~STAT_HEATING;
+      display.fillRect(0, 16, 32, 32, BLACK);
+      display.drawBitmap(0, 16, logo32_vatra0, 32, 32, 1);
+      display.display();
     } else if ((parmTemp0 + parmT1CR < parmTemp1 - parmHSRZ / 2) && !(SysStatus & STAT_HEATING)) {
-      if (serialMsgEn)
+      if (!serialMsgEn)
+        digitalWrite(RLY_T, 1);
+      else
         Serial.println("Pali grijanje");
       SysStatus = SysStatus | STAT_HEATING;
+      display.fillRect(0, 16, 32, 32, BLACK);
+      display.drawBitmap(0, 16, logo32_vatra1, 32, 32, 1);
+      display.display();
     }
     return true;
   } else  return false;
 }
 
 void crtajStatus() {
-  display.fillRect(78, 0, 24, 8, BLACK);
-  display.setCursor(78, 0);
+  display.fillRect(90, 0, 24, 8, BLACK);
+  display.setCursor(90, 0);
   display.printf("[%02x]", SysStatus);
   display.display();
 }
@@ -595,7 +609,7 @@ void crtajMenu() {
 void kazIinfo() {
   char parmNam[5];
 
-  display.printf("ver. %d.%d.%d\n", (VERS & 0xFF000000) >> 24, (VERS & 0x00FF0000) >> 16, (VERS & 0x0000FF00) >> 8);
+  display.printf("ver. %s\n", swVer);
   if (strlen(WiFiSSID) > 14) {
     strncpy(st1, WiFiSSID, 14);
     st1[14] = '\0';
@@ -617,8 +631,6 @@ void kazIinfo() {
       }
     }
   }
-  //display.printf("FWVR:%08x\n", parmFWVR);
-  //display.display();
 }
 
 void menuAkc() {
@@ -700,10 +712,13 @@ void pin_ISR1() {
     parmTemp1 += 0.5;
     SysStatus = SysStatus | STAT_TEMP1_ADJ;
     SysStatus = SysStatus | STAT_BTN_PLUS;
+    ajdeGrijanje();
 
-    display.fillRect(71, 28, 24, 8, BLACK);
-    display.setCursor(35, 28);
-    display.printf("  T1: %d.%02dC", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
+    display.fillRect(35, 13, 85, 24, BLACK);
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(35, 36);
+    display.printf("%d.%02d C", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
+    display.setFont(NULL);
     m1s = millis() + 200;
     display.setCursor(0, 8);
     display.print("B1");
@@ -735,10 +750,13 @@ void pin_ISR2() {
     parmTemp1 -= 0.5;
     SysStatus = SysStatus | STAT_TEMP1_ADJ;
     SysStatus = SysStatus & ~STAT_BTN_PLUS;
+    ajdeGrijanje();
 
-    display.fillRect(71, 28, 24, 8, BLACK);
-    display.setCursor(35, 28);
-    display.printf("  T1: %d.%02dC", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
+    display.fillRect(35, 13, 85, 24, BLACK);
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(35, 36);
+    display.printf("%d.%02d C", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
+    display.setFont(NULL);
     m1s = millis() + 200;
     display.setCursor(0, 8);
     display.print("B2");
@@ -861,22 +879,24 @@ void setup() {
       display.println();
   }
   display.display();
+  sprintf(swVer, "%d.%d.%d(%x)", (VERS & 0xFF000000) >> 24,
+    (VERS & 0x00FF0000) >> 16, (VERS & 0x0000FF00) >> 8, VERS & 0X000000FF);
   if (serialMsgEn) {
     Serial.begin(57600);
-    Serial.printf(greetmsg, (VERS & 0xFF000000) >> 24, (VERS & 0x00FF0000) >> 16, (VERS & 0x0000FF00) >> 8);
+    Serial.printf(greetmsg, swVer);
   } else {
     delay(1000);
-    pinMode(RLY_1, OUTPUT);
-    pinMode(RLY_2, OUTPUT);
-    digitalWrite(RLY_2, 1);
+    pinMode(RLY_T, OUTPUT);
+    pinMode(RLY_E, OUTPUT);
+    digitalWrite(RLY_E, 1);
     delay(250);
-    digitalWrite(RLY_1, 1);
+    digitalWrite(RLY_T, 1);
     delay(250);
-    digitalWrite(RLY_1, 0);
+    digitalWrite(RLY_T, 0);
     delay(250);
-    digitalWrite(RLY_2, 0);
+    digitalWrite(RLY_E, 0);
   }
-
+ 
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
@@ -954,6 +974,7 @@ void setup() {
   }
 
   dlyc1 = 0;
+  display.setCursor(0, 56);
   display.printf("WiFi: ");
   display.display();
   while (!(wif5 = setupWiFi()) && ++dlyc2 >= 5) {
@@ -1017,7 +1038,7 @@ void setup() {
   if (!serialMsgEn) {
     Vcc = ESP.getVcc();
     if (Vcc > DEEPSLEEPVOLT + 400) {
-      digitalWrite(RLY_1, 1);
+      digitalWrite(RLY_E, 1);
     }
   }
 }
@@ -1055,14 +1076,13 @@ void loop() {
     display.setCursor(0, 0);
     display.printf(" wifi + srvr", chipID);
     display.drawBitmap(0, 16,  logo32_vatra1, 32, 32, 1);
-    display.setCursor(35, 16);
-    display.printf("  T0: %sC", temperatureString);
-    display.setCursor(35, 28);
-    display.printf("  T1: %d.%02dC", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
-    display.setCursor(35, 40);
-    display.printf(" Vcc: %d.%03dV", Vcc / 1000, Vcc % 1000);
-    display.setCursor(35, 52);
-    display.printf(" WkU: %d", dlyc1);
+    display.setFont(&FreeSans12pt7b);
+    display.setCursor(35, 36);
+    display.printf("%d.%02d C", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
+    display.setFont(NULL);
+    display.setCursor(48, 56);
+    display.printf("%d.%03dV", Vcc / 1000, Vcc % 1000);
+    display.printf(" (%d)", dlyc1);
     display.display();
     if (WiFi.status() != WL_CONNECTED) {
       if (serialMsgEn)
@@ -1075,43 +1095,35 @@ void loop() {
     //    dlyc1 = 0;
   }
   dlyc1++;
-  if (ajdeGrijanje()) {
-    if (SysStatus & STAT_HEATING) {
-      strcpy(grije, "upal");
-      if (!serialMsgEn)  digitalWrite(RLY_2, 1);
-    }
-    else {
-      strcpy(grije, "ugas");
-      if (!serialMsgEn)  digitalWrite(RLY_2, 0);
-    }
-  } else  strcpy(grije, "*T!*");
+  if (!ajdeGrijanje())
+    strcpy(grije, "*T!*");
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
   if (SysStatus & STAT_HEATING) {
+    strcpy(grije, "pali");
     display.drawBitmap(0, 16,  logo32_vatra1, 32, 32, 1);
   } else {
+    strcpy(grije, "gasi");
     display.drawBitmap(0, 16,  logo32_vatra0, 32, 32, 1);
   }
   display.setCursor(0, 0);
-  display.printf("-%08x-   [%02x]", chipID, SysStatus);
-  display.setCursor(35, 16);
-  display.printf("  T0: %sC", temperatureString);
-  display.setCursor(35, 28);
-  display.printf("  T1: %d.%02dC", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
-  display.setCursor(35, 40);
-  display.printf(" Vcc: %d.%03dV", Vcc / 1000, Vcc % 1000);
-  display.setCursor(35, 52);
-  display.printf(" WkU: %d", dlyc1);
-  //display.println(0xDEADBEEF, HEX);
+  display.printf("-%04x-  %sC [%02x]", chipID & 0xFFFF, temperatureString, SysStatus);
+  display.setFont(&FreeSans12pt7b);
+  display.setCursor(35, 36);
+  display.printf("%d.%02d C", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
+  display.setFont(NULL);
+  display.setCursor(48, 56);
+  display.printf("%d.%03dV", Vcc / 1000, Vcc % 1000);
+  display.printf(" (%d)", dlyc1);
   m1s4slp = millis();
   m1s4slp += 7500;
 
-  display.setCursor(0, 52);
+  display.setCursor(0, 56);
   display.printf("{%s}", grije);
   display.display();
 
-  if (parmFWVR > VERS && ESP.getVcc() >= 2890) {
+  if (parmFWVR > VERS && ESP.getVcc() >= 2750) {
     display.clearDisplay();
     display.setTextSize(1);
     display.setTextColor(WHITE);
@@ -1125,7 +1137,12 @@ void loop() {
     delay(2500);
   }
 
-  if (Vcc > DEEPSLEEPVOLT) {
+  if (Vcc <= DEEPSLEEPVOLT)
+    DScnt += 1;
+  else
+    if(DScnt > 0)
+      DScnt -= 1;
+  if(DScnt < DEEPSLP_THR) {
     while (millis() < m1s4slp) {
       if (digitalRead(D2))  SysStatus = SysStatus & ~STAT_BTN1_ON;
       else  SysStatus = SysStatus | STAT_BTN1_ON;
@@ -1166,7 +1183,7 @@ void loop() {
     wifi_fpm_open();
     wifi_fpm_do_sleep(0xFFFFFFF);
     delay(100);
-    display.setCursor(78, 0);
+    display.setCursor(90, 0);
     display.printf("[%02x]", SysStatus);
     display.display();
 
@@ -1186,7 +1203,7 @@ void loop() {
     display.setCursor(15, 24);
     display.printf("* DS * Vcc: %d.%03dV", Vcc / 1000, Vcc % 1000);
     display.display();
-    if (!serialMsgEn)  digitalWrite(RLY_1, 0);
+    if (!serialMsgEn)  digitalWrite(RLY_E, 0);
     ESP.deepSleep(900000000, WAKE_RF_DEFAULT);
   }
   if (serialMsgEn)
