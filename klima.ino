@@ -21,6 +21,7 @@
 #include <ESP8266HTTPClient.h>
 #include <ESP8266httpUpdate.h>
 #include <Fonts/FreeSans12pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
 extern "C" {
 #include "gpio.h"
 #include "user_interface.h"
@@ -28,7 +29,7 @@ extern "C" {
   //ADC_MODE(ADC_VCC);
 }
 
-#define VERS                    0x00070118
+#define VERS                    0x0007021c
 #define D0                      16              // GPIO16
 #define D1                      5               // GPIO5
 #define D2                      4               // GPIO4
@@ -136,25 +137,45 @@ static const unsigned char PROGMEM logo32_vatra0[] = {
   B00000000, B10011111, B10000110, B00000000,
   B00000000, B11011111, B11001100, B00000000,
   B00000000, B11101111, B11001000, B00000000,
-  B00000000, B01101111, B11100000, B00000000,
-  B00000000, B11101111, B11100001, B00000000,
-  B00000000, B11111111, B11000011, B00000000,
-  B00000000, B11111111, B10000111, B10000000,
-  B00000000, B11111111, B00001111, B10000000,
-  B00000001, B11111110, B00011111, B11000000,
-  B00000001, B11111100, B00111111, B11000000,
-  B00000011, B11111000, B00111111, B11000000,
-  B00000011, B11110000, B10111111, B11000000,
-  B00000011, B11100001, B01111111, B11000000,
-  B00000011, B11000010, B01111111, B11000000,
-  B00000011, B10000000, B01111111, B11000000,
-  B00000011, B00000000, B01101111, B11000000,
-  B00000010, B00010000, B00101111, B11000000,
+  B00000000, B01101111, B11000000, B00000000,
+  B00000000, B11101111, B11000000, B00000000,
+  B00000000, B11111111, B10000001, B00000000,
+  B00000000, B11111111, B00000011, B10000000,
+  B00000000, B11111110, B00000111, B10000000,
+  B00000001, B11111100, B00001111, B11000000,
+  B00000001, B11111000, B00011111, B11000000,
+  B00000011, B11110000, B00111111, B11000000,
+  B00000011, B11100000, B10111111, B11000000,
+  B00000011, B11000001, B01111111, B11000000,
+  B00000011, B10000010, B01111111, B11000000,
+  B00000011, B00000000, B01111111, B11000000,
+  B00000000, B00000000, B01101111, B11000000,
+  B00000000, B00010000, B00101111, B11000000,
   B00000000, B00110000, B00001111, B10000000,
   B00000000, B01110000, B00000111, B10000000,
   B00000000, B11110000, B00000111, B00000000,
   B00000000, B01111000, B00001110, B00000000,
   B00000000, B00011100, B00011000, B00000000
+};
+static const unsigned char PROGMEM thermomtr[] = {
+  B00010000,
+  B00101000,
+  B00101000,
+  B00101000,
+  B00101000,
+  B00111000,
+  B00111000,
+  B00111000,
+  B00111000,
+  B01011100,
+  B01011100,
+  B00111000
+};
+static const unsigned char PROGMEM kruzic[] = {
+  B0110,
+  B1001,
+  B1001,
+  B0110,
 };
 bool serialMsgEn = false;
 struct _strk {
@@ -224,7 +245,7 @@ bool setupWiFi() {
         }
       }
     }
-    display.fillRect(35, 56, 92, 8, BLACK);
+    display.fillRect(32, 56, 95, 8, BLACK);
     if (notchos) {
       display.setCursor(42, 56);
       display.print("nema wifi!!");
@@ -579,8 +600,8 @@ bool ajdeGrijanje() {
       else
         Serial.println("Gasi grijanje");
       SysStatus = SysStatus & ~STAT_HEATING;
-      display.fillRect(0, 16, 32, 32, BLACK);
-      display.drawBitmap(0, 16, logo32_vatra0, 32, 32, 1);
+      display.fillRect(0, 12, 32, 32, BLACK);
+      display.drawBitmap(0, 12, logo32_vatra0, 32, 32, 1);
       display.display();
     } else if ((parmTemp0 + parmT1CR < parmTemp1 - parmHSRZ / 2) && !(SysStatus & STAT_HEATING)) {
       if (!serialMsgEn)
@@ -588,8 +609,8 @@ bool ajdeGrijanje() {
       else
         Serial.println("Pali grijanje");
       SysStatus = SysStatus | STAT_HEATING;
-      display.fillRect(0, 16, 32, 32, BLACK);
-      display.drawBitmap(0, 16, logo32_vatra1, 32, 32, 1);
+      display.fillRect(0, 12, 32, 32, BLACK);
+      display.drawBitmap(0, 12, logo32_vatra1, 32, 32, 1);
       display.display();
     }
     return true;
@@ -625,6 +646,7 @@ void kazIinfo() {
   }
   display.printf("SSID:%s\n", st1);
   display.display();
+  j = 1;
   for (i = 2; i < NOCFGSTR - 1; i++) {  // osim zadnjeg parametra (FWVR)
     if (serialMsgEn)
       Serial.printf(" *parm[%s]: %s;\r\n", Parms[i].st2, Parms[i].st1);
@@ -632,12 +654,37 @@ void kazIinfo() {
       if (strlen(Parms[i].st1) > 0) {
         strncpy(parmNam, Parms[i].st2, 4);
         parmNam[4] = '\0';              // strncpy ne stavlja '\0' na kraj
-        display.printf("%s:%s  ", parmNam, Parms[i].st1);
-        if (i % 2 > 0)  display.printf("\n");
+        display.printf("%-4s:%-4s ", parmNam, Parms[i].st1);
+        if (j % 2 == 0)  display.printf("\n");
         display.display();
+        j++;
       }
     }
   }
+}
+
+void crtajE() {
+  if (SysStatus & STAT_HEATING) {
+    display.drawBitmap(0, 12,  logo32_vatra1, 32, 32, 1);
+  } else {
+    display.drawBitmap(0, 12,  logo32_vatra0, 32, 32, 1);
+  }
+  display.setFont(&FreeSans12pt7b);
+  display.setCursor(45, 42);
+  display.printf("%d.%d C", (int)parmTemp1, (int)(parmTemp1 * 10) % 10);
+  //display.drawBitmap(90, 46, kruzic, 4, 4, 1);
+  display.setCursor(52, 12);
+  display.setFont(&FreeSans9pt7b);
+  display.printf("%s C", temperatureString);
+  display.drawBitmap(42, 0, thermomtr, 8, 12, 1);
+  display.setFont(NULL);
+  if(ENRG_MODE_BATT) {
+    display.setCursor(48, 56);
+    display.printf("%d.%03dV", Vcc / 1000, Vcc % 1000);
+  }
+  display.setCursor(90, 56);
+  display.printf("(%d)", dlyc1);
+  display.display();
 }
 
 void menuAkc() {
@@ -647,8 +694,9 @@ void menuAkc() {
     switch (menuIdx) {
       case MENU_EXIT:         // izlaz iz menu-a
         SysStatus = SysStatus & ~STAT_MENU;
-        display.fillRect(12, 8, 96, 8 * MENUSIZ, BLACK);
+        display.fillRect(12, 8, 96, 55, BLACK);
         display.display();
+        crtajE();
         break;
       case MENU_SETUP:
         strcpy(Parms[7].st1, "1");
@@ -661,12 +709,12 @@ void menuAkc() {
         while (millis() < m1s)  ;
         break;
       case MENU_INFO:
-        display.fillRect(12, 8, 96, 8 * MENUSIZ, BLACK);
+        display.fillRect(0, 8, 108, 8 * MENUSIZ, BLACK);
         display.setCursor(0, 8);
         kazIinfo();
         m1s = millis() + 5000;
         while (millis() < m1s)  ;
-        display.fillRect(0, 8, 120, 8 * MENUSIZ, BLACK);
+        display.fillRect(0, 0, 120, 64, BLACK);
         display.display();
         crtajMenu();
         break;
@@ -708,7 +756,7 @@ void pin_ISR1() {
   while (millis() < m1s)  ;
   SysStatus = SysStatus & ~STAT_SLEEP;
   SysStatus = SysStatus | STAT_BTN1_ON;
-  crtajStatus();
+  //crtajStatus();
   if (SysStatus & STAT_BTN2_ON)  return;
   if (SysStatus & STAT_MENU) {
     menuIdx = ++menuIdx % MENUSIZ;
@@ -721,18 +769,11 @@ void pin_ISR1() {
     SysStatus = SysStatus | STAT_BTN_PLUS;
     ajdeGrijanje();
 
-    display.fillRect(35, 13, 85, 24, BLACK);
+    display.fillRect(45, 24, 80, 24, BLACK);
     display.setFont(&FreeSans12pt7b);
-    display.setCursor(35, 36);
-    display.printf("%d.%02d C", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
+    display.setCursor(45, 42);
+    display.printf("%d.%d C", (int)parmTemp1, (int)(parmTemp1 * 10) % 10);
     display.setFont(NULL);
-    //m1s = millis() + 200;
-    //display.setCursor(0, 8);
-    //display.print("B1");
-    //display.display();
-    //while (millis() < m1s)  ;
-    //display.fillRect(0, 8, 12, 8, BLACK);
-    //display.display();
   }
 }
 
@@ -745,7 +786,7 @@ void pin_ISR2() {
   while (millis() < m1s)  ;
   SysStatus = SysStatus & ~STAT_SLEEP;
   SysStatus = SysStatus | STAT_BTN2_ON;
-  crtajStatus();
+  //crtajStatus();
   if (SysStatus & STAT_BTN1_ON)  return;
   if (SysStatus & STAT_MENU) {
     crtajMenu();
@@ -758,18 +799,11 @@ void pin_ISR2() {
     SysStatus = SysStatus & ~STAT_BTN_PLUS;
     ajdeGrijanje();
 
-    display.fillRect(35, 13, 85, 24, BLACK);
+    display.fillRect(45, 24, 80, 24, BLACK);
     display.setFont(&FreeSans12pt7b);
-    display.setCursor(35, 36);
-    display.printf("%d.%02d C", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
+    display.setCursor(45, 42);
+    display.printf("%d.%d C", (int)parmTemp1, (int)(parmTemp1 * 10) % 10);
     display.setFont(NULL);
-    //m1s = millis() + 200;
-    //display.setCursor(0, 8);
-    //display.print("B2");
-    //display.display();
-    //while (millis() < m1s)  ;
-    //display.fillRect(0, 8, 12, 8, BLACK);
-    //display.display();
   }
 }
 
@@ -873,17 +907,20 @@ void handleDelay() {
     if (digitalRead(D3))  SysStatus = SysStatus & ~STAT_BTN2_ON;
     else  SysStatus = SysStatus | STAT_BTN2_ON;
 
-    crtajStatus();
+    //crtajStatus();
     if ((SysStatus & STAT_BTN1_ON) && (SysStatus & STAT_BTN2_ON)) {
-      if (SysStatus & STAT_BTN_PLUS)  parmTemp1 -= 0.5; //
-      else  parmTemp1 += 0.5;                           // vrati promjenu T1
+      if (SysStatus & STAT_BTN_PLUS) {
+        parmTemp1 -= 0.5;                              //
+        SysStatus = SysStatus & ~STAT_BTN_PLUS;
+      }
+      else  parmTemp1 += 0.5;                          // vrati promjenu T1
       SysStatus |= STAT_MENU;
-      display.setCursor(35, 52);
-      display.printf(" -- menu -- ");
+      display.fillRect(0, 32, 60, 8, BLACK);
+      display.setCursor(32, 56);
+      display.printf("-- menu --");
       display.display();
       m1s = millis() + 500;
       while (millis() < m1s)  ;
-      //        display.fillRect(35, 52, 72, 8, BLACK);
       display.clearDisplay();
       display.setTextSize(1);
       display.setTextColor(WHITE);
@@ -1082,7 +1119,7 @@ void setup() {
 void loop() {
   float temperature;
   int upH, upM, upS, m1s;
-  char grije[5];
+  char grije[5] = "\0";
 
   if (SysStatus & STAT_MENU) {
     display.display();
@@ -1109,17 +1146,9 @@ void loop() {
   display.setTextSize(1);
   display.setTextColor(WHITE);
   if ((int)dlyc1 % parmWUIM == 0) {
-    display.setCursor(0, 0);
-    display.printf(" wifi + srvr", chipID);
-    display.drawBitmap(0, 16,  logo32_vatra1, 32, 32, 1);
-    display.setFont(&FreeSans12pt7b);
-    display.setCursor(35, 36);
-    display.printf("%d.%02d C", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
-    display.setFont(NULL);
-    display.setCursor(48, 56);
-    display.printf("%d.%03dV", Vcc / 1000, Vcc % 1000);
-    display.printf(" (%d)", dlyc1);
-    display.display();
+    display.setCursor(0, 56);
+    display.printf(" wifi + srvr");
+    crtajE();
     if (WiFi.status() != WL_CONNECTED) {
       if (serialMsgEn)
         Serial.println("WiFi reconnect!");
@@ -1128,7 +1157,6 @@ void loop() {
       setupWiFi();
     }
     drvaIugljen();
-    //    dlyc1 = 0;
   }
   dlyc1++;
   if (!ajdeGrijanje())
@@ -1136,27 +1164,19 @@ void loop() {
   display.clearDisplay();
   display.setTextSize(1);
   display.setTextColor(WHITE);
-  if (SysStatus & STAT_HEATING) {
-    strcpy(grije, "pali");
-    display.drawBitmap(0, 16,  logo32_vatra1, 32, 32, 1);
-  } else {
-    strcpy(grije, "gasi");
-    display.drawBitmap(0, 16,  logo32_vatra0, 32, 32, 1);
-  }
-  display.setCursor(0, 0);
-  display.printf("-%04x-  %sC [%02x]", chipID & 0xFFFF, temperatureString, SysStatus);
-  display.setFont(&FreeSans12pt7b);
-  display.setCursor(35, 36);
-  display.printf("%d.%02d C", (int)parmTemp1, (int)(parmTemp1 * 100) % 100);
-  display.setFont(NULL);
-  display.setCursor(48, 56);
-  display.printf("%d.%03dV", Vcc / 1000, Vcc % 1000);
-  display.printf(" (%d)", dlyc1);
+  display.setCursor(0, 56);
+  display.printf("-%04x-", chipID & 0xFFFF);
+  display.setCursor(90, 0);
+  //display.printf("[%02x]", SysStatus);
+  crtajE();
   m1s4slp = millis();
 
-  display.setCursor(0, 56);
-  display.printf("{%s}", grije);
-  display.display();
+  if (strlen(grije)) {
+    display.fillRect(0, 56, 36, 8, BLACK);
+    display.setCursor(0, 56);
+    display.printf("{%s}", grije);
+    display.display();
+  }
 
   if (parmFWVR > VERS && ESP.getVcc() >= OTA_MINVOLT) {
     display.clearDisplay();
@@ -1200,10 +1220,10 @@ void loop() {
             GPIO_PIN_INTR_HILEVEL = 5       */
       wifi_fpm_open();
       wifi_fpm_do_sleep(0xFFFFFFF);
-      delay(100);
-      display.setCursor(90, 0);
-      display.printf("[%02x]", SysStatus);
-      display.display();
+      //delay(100);
+      //display.setCursor(90, 0);
+      //display.printf("[%02x]", SysStatus);
+      //display.display();
 
     //    gpio_pin_wakeup_disable();  NE SMIJE! onemogucuje intr na  tom pinu!
       SysStatus = SysStatus & ~STAT_SLEEP;
